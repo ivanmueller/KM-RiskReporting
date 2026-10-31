@@ -59,3 +59,6 @@ dist/
 htmlcov/
 .idea/
 .vscode/
+
+# Scratch output from independent code reviews
+review_scratch/

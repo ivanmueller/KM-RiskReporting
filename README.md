@@ -7,7 +7,9 @@ Governed by *Risk Reporting Automation — Project Game Plan v2.0 (2026-10-31)*.
 document hashing/identity, a guarded configuration-driven connection layer, a minimal portable
 SQL schema with migrations, and a synthetic end-to-end smoke test. No real data has been
 processed, no company system has been connected, and nothing is published.
-See [`docs/phase1_scope.md`](docs/phase1_scope.md) and [`docs/blockers.md`](docs/blockers.md).
+See [`HANDOFF.md`](HANDOFF.md) (start here), [`docs/phase1_scope.md`](docs/phase1_scope.md),
+[`docs/blockers.md`](docs/blockers.md) and the review prompt
+[`docs/review/codex_stress_test_prompt.md`](docs/review/codex_stress_test_prompt.md).
 
 ## Ground rules
 
