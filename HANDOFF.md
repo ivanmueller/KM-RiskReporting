@@ -133,6 +133,8 @@ Summary only; the detail is in `docs/blockers.md`:
 
 ## 9. Recommended next steps (in order)
 
+The live task and stage tracker is [`ROADMAP.md`](ROADMAP.md); keep it updated as items close.
+
 1. Fix D-1 and D-2 (a safety-guard bypass and silent number corruption), then D-3 and D-4, adding a
    regression test for each.
 2. Run the independent stress-test review in `docs/review/codex_stress_test_prompt.md` and
