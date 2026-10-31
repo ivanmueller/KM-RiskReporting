@@ -78,8 +78,22 @@ repository-hygiene tests skip outside a git checkout), and the demo ends with `S
 
 ## 5. Confirmed defects (found during handoff prep) — all FIXED
 
-Each one was reproduced on 2026-10-31 against commit `694a11d`, and is now fixed with regression
-tests that fail on the old code. Kept here as the record; the reviewer should try to break the fixes.
+Each one was reproduced on 2026-10-31 against commit `694a11d` and is now fixed with regression tests.
+Kept here as the record; the reviewer should try to break the fixes.
+
+**How "the tests fail on the old code" was checked:** the new tests were run against `694a11d`'s
+`src/`. Results:
+- D-1/D-5 (`tests/test_config.py -k "d1 or d5"`): 17 of 17 fail.
+- D-3 (`-k d3`): 1 of 1 fails.
+- D-4 (`-k d4`): 3 of 4 fail. The one that passes is the exact-match control (`analyst` approving
+  `analyst`), which the old database rule already blocked.
+- D-2 (`tests/test_parse_strict.py`): 15 fail and 16 pass. The 16 are cases the old parser already
+  handled correctly (for example `$2.50` rejected, `2.65` accepted). Of the 15, 14 are the real
+  defects (12 ambiguous numbers converted, 2 non-ISO dates accepted). The thousands-separator test
+  fails only because the old `_parse` had no such parameter.
+- The other import tests (S-4, S-5) need names that did not exist before, so they cannot be
+  collected against the old code at all.
+- D-6 was shown by running the new migration with `run_guarded` bypassed.
 
 | ID | Status | Severity | Defect | Reproduction | Fix applied |
 | --- | --- | --- | --- | --- | --- |
