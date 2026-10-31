@@ -25,15 +25,13 @@ actually ran. In this domain, a wrong number that looks plausible is worse than 
 ## Scope — what you review and what you don't
 
 **In scope (Claude's output):**
-- Every tracked file on this branch. All five commits are authored by `Claude
-  <noreply@anthropic.com>`: `2948ee2`, `694a11d`, `d188642`, `193868a` and `070c321`. Confirm with
-  `git log --format='%h %an <%ae> %s'` and list the files with `git ls-files`. The commit that adds
-  this revision of the prompt (and any later ones) are also Claude's and also in scope, so check
-  that every commit on the branch has that author. This covers `src/`,
-  `tests/`, both migrations (including the Alembic-rendered `0001_initial.py`, which Claude
+- Every tracked file on this branch. Every commit on the branch, from `2948ee2` to `HEAD`, is
+  authored by `Claude <noreply@anthropic.com>`. Confirm with `git log --format='%h %an <%ae> %s'`
+  (report any commit with a different author, and leave its changes out of scope), and list the
+  files with `git ls-files`. This covers `src/`, `tests/`, both migrations (including the Alembic-rendered `0001_initial.py`, which Claude
   committed), `config/`, `inventory/templates/`, `requirements/lock.txt`, `.gitignore`,
   `pyproject.toml`, `alembic.ini` and every Markdown document.
-- Every claim in those documents and in the five commit messages: test counts, "fixed",
+- Every claim in those documents and in every commit message: test counts, "fixed",
   "verified", "done", ticked roadmap boxes, documented commands and their expected output.
 - How Claude's code *uses* third-party libraries (SQLAlchemy, Alembic, openpyxl, `zipfile`,
   `csv`, pytest). A wrong assumption by Claude about library behaviour is in scope.
