@@ -1,0 +1,11 @@
+# Configuration used by the automated test-suite and synthetic demo. Synthetic data only.
+[environment]
+name = "test"
+
+[database]
+backend = "sqlite"
+sqlite_path = "var/riskparse_test.db"
+authorized = false
+
+[paths]
+archive_root = "var/archive_test"

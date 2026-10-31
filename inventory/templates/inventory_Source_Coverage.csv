@@ -1,0 +1,7 @@
+coverage_id,source_type,trader_name,book,trade_types_covered,source_location,file_or_report_name,update_frequency,source_owner,egistix_covers,known_gaps,october_export_obtained,confirmed_by_risk,confirmed_date,notes
+SRC-TRADER-01,TRADER_SHEET,,,,,,,,,,,,,
+SRC-TRADER-02,TRADER_SHEET,,,,,,,,,,,,,
+SRC-TRADER-03,TRADER_SHEET,,,,,,,,,,,,,Third trader - confirm whether in scope; delete row only with Risk sign-off
+SRC-EGISTIX-01,EGISTIX,,,,,,,,,,,,,Incomplete trade coverage - document exactly what is excluded
+SRC-CONTRACTS-01,CONTRACT_FOLDER,,,,,,,,,,,,,October 2026 Physical / Financial / Evergreen folders
+SRC-EVERGREEN-01,EVERGREEN_REGISTRY,,,,,,,,,,,,,Active evergreen agreements from prior years that affect October

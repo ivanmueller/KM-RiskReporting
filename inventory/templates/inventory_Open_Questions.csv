@@ -1,0 +1,11 @@
+question_id,area,question,owner,raised_date,due_date,is_blocker,status,answer
+Q-001,IT_SQL,Which SQL product/edition and version hosts the risk database? (SQL Server / Azure SQL / other),,2026-10-31,,Y,OPEN,
+Q-002,IT_SQL,"Server/instance, database and schema names for DEV/TEST and PROD; are they separated?",,2026-10-31,,Y,OPEN,
+Q-003,IT_SQL,Client driver and authentication method (Windows integrated / managed identity / SQL login); service identity for scheduled runs.,,2026-10-31,,Y,OPEN,
+Q-004,IT_SQL,"Database owner/DBA, role model (staging writer, reporter, publisher), backup frequency, recovery model, restore testing.",,2026-10-31,,Y,OPEN,
+Q-005,IT_STORAGE,Exact UNC path for the L drive Risk Reporting root and the restricted 07_SourceArchive; share+NTFS permissions and backup.,,2026-10-31,,Y,OPEN,
+Q-006,IT_SECURITY,Approved Python environment/packages on the controlled machine; dependency licence/vulnerability review owner.,,2026-10-31,,Y,OPEN,
+Q-007,EGISTIX,What does a $0 value in Egistix encode for evergreen deals? Field dictionary and export coverage.,,2026-10-31,,Y,OPEN,
+Q-008,TRADERS,"Confirm the 2 or 3 in-scope traders, their books and the location of each trader's October sheet.",,2026-10-31,,Y,OPEN,
+Q-009,RISK,"Approved reconciliation status definitions, aging rule and escalation owner.",,2026-10-31,,Y,OPEN,
+Q-010,LEGAL,"Is any enterprise AI service approved for contract interpretation? (Until then: manual review only, no confidential data to AI).",,2026-10-31,,Y,OPEN,

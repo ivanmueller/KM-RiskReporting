@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "riskparse"
+version = "0.1.0"
+description = "Risk Reporting Automation - Stage 1, Phase 1 foundation (source inventory, evidence identity, SQL schema)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary - internal use only" }
+dependencies = [
+    "SQLAlchemy>=2.0,<2.2",
+    "alembic>=1.13,<2",
+    "openpyxl>=3.1,<3.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.5",
+]
+# Candidate server drivers. Install ONLY the one IT confirms; neither is verified yet.
+mssql = ["pyodbc>=5"]
+postgresql = ["psycopg[binary]>=3.1"]
+
+[project.scripts]
+riskparse = "riskparse.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+riskparse = ["db/migrations/script.py.mako", "db/migrations/*.py", "db/migrations/versions/*.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Frozen, Alembic-rendered DDL: keep exactly as rendered.
+"src/riskparse/db/migrations/versions/*.py" = ["E501", "Q000"]

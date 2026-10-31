@@ -1,0 +1,4 @@
+sheet_id,trader_name,book,file_name,unc_path,tab_name,as_of_timestamp,period_covered,row_count,sha256,trade_types,maintained_by,includes_non_egistix_trades,notes
+TS-01,,,,,,,2026-10,,,,,,
+TS-02,,,,,,,2026-10,,,,,,
+TS-03,,,,,,,2026-10,,,,,,Third trader - confirm whether in scope

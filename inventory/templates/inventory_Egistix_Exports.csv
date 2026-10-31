@@ -1,0 +1,1 @@
+export_id,report_name,export_file_name,unc_path,exported_by,export_timestamp,reporting_period,filter_criteria,row_count,sha256,products_not_covered,zero_value_rows,field_dictionary_obtained,egistix_owner,notes

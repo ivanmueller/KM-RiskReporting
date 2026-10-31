@@ -1,0 +1,1 @@
+crosswalk_id,trader_name,trade_date,counterparty_raw_name,commodity,physical_financial,side,volume_raw,volume_unit,volume_basis,price_raw,price_unit,delivery_location,delivery_start,delivery_end,trader_sheet_ref,egistix_deal_id,counterparty_confirm_ref,doc_inventory_ids,in_trader_sheet,in_egistix,confirm_found,preliminary_status,evidence_location,keyed_by,verified_by,notes

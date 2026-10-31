@@ -1,0 +1,36 @@
+# riskparse configuration - EXAMPLE ONLY.
+# Copy to config/settings.local.toml (git-ignored) or point RISKPARSE_CONFIG at a file.
+# Never put passwords in this file. Credentials come from integrated (Windows) auth
+# or from environment variables named below, as approved by IT.
+
+[environment]
+# local | test | dev | prod.  Phase 1 refuses to connect to "prod".
+name = "local"
+
+[database]
+# sqlite     = local test adapter for synthetic data ONLY (not the system of record)
+# mssql      = candidate: SQL Server / Azure SQL via pyodbc   (UNCONFIRMED - awaiting IT)
+# postgresql = candidate: PostgreSQL via psycopg               (UNCONFIRMED - awaiting IT)
+backend = "sqlite"
+sqlite_path = "var/riskparse_local.db"
+
+# ---- Server settings (ignored for sqlite). Fill in ONLY from IT-issued details. ----
+# host = ""
+# port = 1433
+# database = ""
+# schema = ""                     # optional dedicated risk schema
+# odbc_driver = "ODBC Driver 18 for SQL Server"   # mssql only, confirm with IT
+# authentication = "integrated"   # integrated | env_password
+# username_env = "RISKPARSE_DB_USER"
+# password_env = "RISKPARSE_DB_PASSWORD"
+# encrypt = true
+# trust_server_certificate = false
+
+# Must be set to true only after IT has authorized this configuration for this
+# environment. Server connections are refused while false.
+authorized = false
+
+[paths]
+# Content-addressed evidence archive used by the local demo. For real use IT must
+# provide the UNC path (e.g. \\server\share\Risk Reporting\07_SourceArchive).
+archive_root = "var/archive"

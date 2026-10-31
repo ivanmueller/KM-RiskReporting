@@ -1,0 +1,199 @@
+"""Command-line interface (Phase 1 commands only).
+
+Commands that would publish, roll back, export reports or schedule runs do not exist
+yet by design (game plan 9.6 lists them as a proposed interface).
+"""
+
+from __future__ import annotations
+
+import argparse
+import getpass
+import json
+import sys
+from datetime import date
+from pathlib import Path
+
+from riskparse import __version__
+
+
+def _settings(args):
+    from riskparse.config import load_settings
+    return load_settings(args.config)
+
+
+def cmd_config_check(args) -> int:
+    from riskparse.db.connection import describe_url
+    s = _settings(args)
+    print(json.dumps(s.redacted(), indent=2))
+    print("url:", describe_url(s))
+    if s.database.backend == "sqlite":
+        print("NOTE: sqlite is the local test adapter for synthetic data only.")
+    return 0
+
+
+def cmd_db_upgrade(args) -> int:
+    from riskparse.db import migrate
+    from riskparse.db.connection import create_db_engine
+    engine = create_db_engine(_settings(args))
+    try:
+        migrate.upgrade(engine, args.revision)
+        print("database at revision:", migrate.current_revision(engine))
+    finally:
+        engine.dispose()
+    return 0
+
+
+def cmd_db_current(args) -> int:
+    from riskparse.db import migrate
+    from riskparse.db.connection import create_db_engine
+    engine = create_db_engine(_settings(args))
+    try:
+        print("current:", migrate.current_revision(engine), "| head:", migrate.head_revision())
+    finally:
+        engine.dispose()
+    return 0
+
+
+def cmd_register(args) -> int:
+    from riskparse.db.connection import create_db_engine
+    from riskparse.evidence.registry import register_document
+    s = _settings(args)
+    engine = create_db_engine(s)
+    actor = args.actor or getpass.getuser()
+    with engine.begin() as conn:
+        for p in args.paths:
+            r = register_document(conn, p, actor=actor, source_channel=args.channel,
+                                  category=args.category,
+                                  archive_root=None if args.no_archive else s.paths.archive_root)
+            print(f"{r.outcome:<9} {r.document_id} {r.sha256} {p}"
+                  + (f" (revision of {r.revision_of_document_id})"
+                     if r.revision_of_document_id else ""))
+    engine.dispose()
+    return 0
+
+
+def cmd_audit_verify(args) -> int:
+    from riskparse import audit
+    from riskparse.db.connection import create_db_engine
+    from riskparse.evidence.registry import verify_archive
+    engine = create_db_engine(_settings(args))
+    with engine.connect() as conn:
+        chain = audit.verify_chain(conn)
+        problems = verify_archive(conn)
+    engine.dispose()
+    print(f"audit chain ok={chain.ok} events={chain.events_checked}"
+          + (f" first_bad={chain.first_bad_event_id} ({chain.problem})" if not chain.ok else ""))
+    for doc, problem in problems:
+        print(f"ARCHIVE PROBLEM {doc}: {problem}")
+    return 0 if chain.ok and not problems else 1
+
+
+def cmd_inventory_template(args) -> int:
+    from riskparse.inventory.workbook import write_csv_templates, write_xlsx_template
+    out = Path(args.out)
+    x = write_xlsx_template(out / "October_2026_Source_Inventory_TEMPLATE.xlsx")
+    print("wrote", x)
+    if args.csv:
+        for p in write_csv_templates(out):
+            print("wrote", p)
+    return 0
+
+
+def cmd_inventory_validate(args) -> int:
+    from riskparse.inventory.workbook import ERROR, MISSING, validate_xlsx
+    issues = validate_xlsx(args.path)
+    for i in issues:
+        print(i)
+    errors = sum(i.severity == ERROR for i in issues)
+    missing = sum(i.severity == MISSING for i in issues)
+    print(f"\n{errors} error(s), {missing} missing required value(s), "
+          f"{len(issues) - errors - missing} warning(s)")
+    if errors:
+        return 1
+    if missing and args.strict:
+        return 2
+    return 0
+
+
+def cmd_inventory_scan(args) -> int:
+    from riskparse.inventory.scan import scan_folder, write_scan_csv
+    rows, findings = scan_folder(args.root, inventoried_by=args.by or getpass.getuser(),
+                                 inventoried_date=date.today().isoformat())
+    out = write_scan_csv(rows, args.out)
+    print(f"{len(rows)} file(s) hashed -> {out}")
+    for f in findings:
+        print(f"{f.kind}: {f.detail}")
+    return 0
+
+
+def cmd_demo_smoke(args) -> int:
+    from riskparse.demo.smoke import run_smoke
+    summary = run_smoke(args.workdir)
+    print(json.dumps(summary, indent=2, default=str))
+    ok = (summary["audit_chain_ok"] and not summary["archive_problems"]
+          and summary["active_publication"] is None)
+    print("\nSMOKE DEMO:", "PASS" if ok else "FAIL")
+    return 0 if ok else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="riskparse", description=__doc__)
+    p.add_argument("--version", action="version", version=f"riskparse {__version__}")
+    p.add_argument("--config", help="path to settings TOML (else RISKPARSE_CONFIG / "
+                                    "config/settings.local.toml / defaults)")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("config-check", help="show resolved, redacted configuration"
+                   ).set_defaults(func=cmd_config_check)
+    up = sub.add_parser("db-upgrade", help="apply migrations")
+    up.add_argument("--revision", default="head")
+    up.set_defaults(func=cmd_db_upgrade)
+    sub.add_parser("db-current", help="show migration revision").set_defaults(func=cmd_db_current)
+
+    reg = sub.add_parser("register-document", help="hash and register document(s)")
+    reg.add_argument("paths", nargs="+")
+    reg.add_argument("--channel", default="MANUAL_INTAKE")
+    reg.add_argument("--category")
+    reg.add_argument("--actor")
+    reg.add_argument("--no-archive", action="store_true")
+    reg.set_defaults(func=cmd_register)
+
+    sub.add_parser("audit-verify", help="verify audit hash chain and archive hashes"
+                   ).set_defaults(func=cmd_audit_verify)
+
+    it = sub.add_parser("inventory-template", help="write the blank source-inventory template")
+    it.add_argument("--out", default="inventory/templates")
+    it.add_argument("--csv", action="store_true", help="also write per-sheet CSV templates")
+    it.set_defaults(func=cmd_inventory_template)
+
+    iv = sub.add_parser("inventory-validate", help="validate a completed inventory workbook")
+    iv.add_argument("path")
+    iv.add_argument("--strict", action="store_true", help="exit 2 if required values missing")
+    iv.set_defaults(func=cmd_inventory_validate)
+
+    sc = sub.add_parser("inventory-scan", help="hash files under a folder (read-only)")
+    sc.add_argument("--root", required=True)
+    sc.add_argument("--out", required=True, help="CSV to write (keep it on the L drive)")
+    sc.add_argument("--by", help="inventoried_by name")
+    sc.set_defaults(func=cmd_inventory_scan)
+
+    dm = sub.add_parser("demo-smoke", help="run the synthetic end-to-end smoke demo")
+    dm.add_argument("--workdir", default="var/demo")
+    dm.set_defaults(func=cmd_demo_smoke)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except Exception as exc:  # surface a clean message; tracebacks with --debug later
+        from riskparse.config import ConfigError
+        if isinstance(exc, ConfigError):
+            print(f"configuration refused: {exc}", file=sys.stderr)
+            return 3
+        raise
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

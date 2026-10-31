@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------------------
+# CONFIDENTIALITY GUARD: contracts, trade records, exports and credentials must
+# never be committed. Source evidence lives on the L drive / UNC share only.
+# ---------------------------------------------------------------------------
+
+# Contract / email / document evidence (all locations)
+*.pdf
+*.msg
+*.eml
+*.tif
+*.tiff
+*.docx
+*.doc
+*.zip
+
+# Spreadsheets and tabular exports (Egistix, trader sheets, reports)
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+# ...except the blank, synthetic-free inventory templates
+!inventory/templates/*.xlsx
+!inventory/templates/*.csv
+
+# Completed inventories and any real source data
+inventory/completed/
+data/
+source_data/
+exports/
+reports_out/
+
+# Credentials and local configuration
+.env
+.env.*
+*.local.toml
+config/settings.toml
+*.pem
+*.key
+*.pfx
+
+# Local databases, runtime output, logs
+var/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Python / tooling
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
