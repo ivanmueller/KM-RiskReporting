@@ -9,7 +9,7 @@ from __future__ import annotations
 SOURCE_SYSTEMS = ("CONTRACT", "EGISTIX", "TRADER_SHEET", "BROKER", "EXCHANGE", "OTHER")
 
 DOCUMENT_FILE_TYPES = ("PDF", "XLSX", "XLS", "XLSM", "CSV", "EML", "MSG", "DOCX", "TIFF",
-                       "OTHER")
+                       "ZIP", "OTHER")   # ZIP added in migration 0002
 
 DOCUMENT_CONTENT_STATUSES = (
     "REGISTERED",      # bytes hashed, not yet reviewed

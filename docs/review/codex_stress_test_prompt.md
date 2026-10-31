@@ -4,6 +4,9 @@ Copy everything below the line into Codex (or any code-review agent) with the re
 out at branch `claude/risk-reporting-phase-1-x8u26q`. The prompt is self-contained: the reviewer
 does not need the game-plan document.
 
+*Revision 2 (2026-10-31): written for the code after fixes B1–B8. It adds attacks on the
+fixes themselves, safe ZIP intake and migration `0002`.*
+
 ---
 
 ## Role and goal
@@ -34,7 +37,7 @@ In this domain, a wrong number that looks plausible is worse than a crash. Prior
   ruff check src tests
   riskparse demo-smoke --workdir var/demo
   ```
-  The baseline should be 97 passed and lint clean. Report it if it isn't.
+  The baseline should be 226 passed and lint clean. Report it if it isn't.
 - If something is only a suspicion you could not reproduce, list it separately as
   *unconfirmed*, with the reason you could not reproduce it. Never present a guess as confirmed.
 
@@ -71,8 +74,14 @@ Treat each of these as a requirement. A violation is a finding.
 9. **Audit trail** is append-only and hash-chained, so edits, deletions and reordering must be
    detected by `audit.verify_chain`.
 10. **Timestamps** are timezone-aware UTC, and naive datetimes are rejected.
-11. **Migrations** are frozen literal DDL, portable across engines, and must match
-    `src/riskparse/db/schema.py` exactly.
+11. **Migrations** (`0001_initial`, `0002_sod_case_and_zip`) are frozen literal DDL, portable
+    across engines, and must match `src/riskparse/db/schema.py` exactly, including CHECK text.
+    Upgrading and downgrading a database **that already holds data** must work and must not leave
+    foreign-key violations.
+12. **Received archives are evidence.** `riskparse intake-zip` must hash the ZIP as received and
+    never modify it. It must never write outside the extraction directory or overwrite a file.
+    It must not follow links or extract encrypted members, must stop a zip bomb, and every refused
+    member must still appear in the manifest as `EXCEPTED` with its reason, never silently dropped.
 
 ## Attack plan — work through every item
 
@@ -90,6 +99,14 @@ Treat each of these as a requirement. A violation is a finding.
 - `RISKPARSE_CONFIG` pointing at a directory, an empty file, or invalid TOML.
 - `describe_url` / `config-check`: can any secret value from the environment appear in printed
   output or in exception messages?
+- **Attack the D-1/D-5 fixes** (`_check_types`, `_INJECTION_CHARS`, `_FORBIDDEN_WORDS`):
+  - TOML datetimes, arrays or inline tables in string fields;
+  - integers that are really booleans (`authorized = 1`);
+  - Unicode look-alikes of `@`, `;` and `=` (full-width `＠`, `；`, `＝`) in `host`/`odbc_driver`;
+  - newline or NUL characters in values;
+  - a legitimate SQL Server named instance `SERVER\INSTANCE` (must still be accepted);
+  - lowercase or odd `*_env` names;
+  - credential-like key names the word list misses (`pw`, `passphrase`, `conn_str`).
 - Is `schema_translate_map` (the `database.schema` setting) applied consistently, including where
   Alembic puts its `alembic_version` table?
 
@@ -110,6 +127,16 @@ Treat each of these as a requirement. A violation is a finding.
 - Downgrade then upgrade with data present: what happens?
 - Can a second `active_publication` row exist, or can the pointer be set to a publication that is
   not `APPROVED`/`PUBLISHED`? Is that enforced anywhere?
+- **Migration 0002 and `db/migrate.run_guarded`:**
+  - on SQLite, does the batch rebuild keep every index, FK, UNIQUE and server default (not only
+    CHECKs), and the seeded `active_publication` row?
+  - is the `LOWER()` approver check bypassable with whitespace (`'pat '`) or Unicode case-folding
+    differences that SQL `LOWER()` and Python `.lower()` treat differently (`ß`, Turkish `İ`)?
+  - on downgrade, is mapping `ZIP` back to `OTHER` acceptable or silent data loss?
+  - `run_guarded`: can foreign keys be left **off** on a pooled connection after an exception?
+    Can a violation slip past `foreign_key_check`?
+  - running `alembic upgrade head` directly, with `RISKPARSE_CONFIG` set, must behave
+    identically to `riskparse db-upgrade`.
 
 ### C. Evidence identity (`evidence/hashing.py`, `evidence/archive.py`, `evidence/registry.py`)
 - Edge-case files: empty files (0 bytes), very large files (simulate with a sparse file),
@@ -141,7 +168,13 @@ Treat each of these as a requirement. A violation is a finding.
   non-ASCII text produce stable hashes, or can the same logical event hash differently?
 
 ### E. Source import (`imports.py`)
-This is the highest-risk area for wrong numbers. Probe `_parse` and `import_csv_source` with:
+This is the highest-risk area for wrong numbers. D-2, S-4 and S-5 were fixed (strict ASCII decimals,
+an explicit thousands separator, ISO dates only, re-hashing before parsing, loud CSV-shape errors).
+**Try to break those fixes**, then probe `_parse` and `import_csv_source` with:
+- Values the strict pattern accepts but that are still wrong: leading zeros (`007`), `-0`, very long
+  digit strings that exceed `NUMERIC(28,10)` precision or scale (are they silently rounded,
+  especially on SQLite, which stores NUMERIC as float?), and a declared `thousands_separator=" "`
+  with a non-breaking space.
 - Numbers: `"2,65"` (European decimal), `"1,234.56"`, `"1.234,56"`, `"$2.50"`, `"(100)"`
   (accounting negative), `"-0"`, `" 5 "`, `"1e3"`, `"NaN"`, `"Infinity"`, `"٣"` (non-ASCII
   digits), and empty versus whitespace-only. Which ones become a *wrong number* instead of NULL plus a report?
@@ -150,16 +183,19 @@ This is the highest-risk area for wrong numbers. Probe `_parse` and `import_csv_
 - CSV shape: duplicate headers, a header row with a BOM, cp1252 encoding, embedded newlines,
   rows longer or shorter than the header, a completely empty file, and a header-only file.
 - A repeated `source_record_id` within one file: is the error clear, and is partial data left behind?
-- Integrity: modify the archived bytes after registration, then import. Does the import notice
-  that it is parsing bytes that no longer match the registered SHA-256?
+- Integrity: modify the archived bytes after registration, then import. The import should now
+  refuse. Can you find a path where it still parses unverified bytes (fallback to
+  `original_path`, symlinks, a file replaced between the read and the parse)?
 - Idempotency: is a re-import after a *failed* import possible? Does the same file registered
   under two different `source_system` values double count?
 
 ### F. Reconciliation (`reconcile/exact.py`)
 Build small synthetic scenarios (copy the pattern in `src/riskparse/demo/smoke.py`) and check
 the status each one gets:
-- A source row that carries only a reference (no side/volume/price/dates). Is it reported as
-  `MATCHED` even though nothing economic was compared?
+- S-1 was fixed (a booking row missing side, volume or price can't make a trade `MATCHED`).
+  Attack it: a row with side, volume and price but no dates; a value present but unparsed (so
+  NULL, with the reason in `unparsed_values`); `price_value = 0` versus terms `UNRESOLVED`;
+  `CONTRACT`/`OTHER` source systems; rules version `exact-alias-v0.2` recorded on the run.
 - Trades from another month (for example a September trade) when reconciling `2026-10`. Are they
   falsely `NOT_BOOKED`/`UNCONFIRMED`? Older evergreen trades must still be included, so check both.
 - A trade whose only link is an `AMENDMENT` or `CANCELLATION` document. A `CANCELLED` trade still
@@ -191,7 +227,29 @@ the status each one gets:
 - Is the committed `inventory/templates/*.xlsx` identical in structure to what
   `riskparse inventory-template` produces now?
 
-### H. Demo, CLI and tests themselves
+### H. Safe ZIP intake (`evidence/intake_zip.py`, `riskparse intake-zip`)
+Build hostile archives with Python's `zipfile` (or by patching bytes) and check every guarantee in
+requirement 12:
+- Path tricks the sanitiser may miss: mixed `/` and `\`, `./../`, Unicode look-alikes of `/` and `.`
+  (`∕`, `․`, full-width `．．`), very long names, names that only become dangerous after NFC/NFD
+  normalisation, trailing dots/spaces on intermediate folders, `CON` without an extension, and
+  alternate data streams (`a.pdf:zone`).
+- **Header lies:** `file_size` smaller or larger than the real data; CRC mismatch; a local header
+  that disagrees with the central directory; overlapping entries (one file's data inside
+  another's); duplicate central-directory entries; ZIP64 sizes.
+- **Bombs:** many members just under the ratio floor (10 MiB); a highly compressed member under the
+  floor but huge in total; nested archives (they must not be unpacked).
+- **Race and state:** destination created between the empty check and the first write; a destination that
+  is a symlink to elsewhere; a ZIP that changes between hashing and reading (TOCTOU); a crash
+  mid-extraction (what is left on disk, and does a retry refuse safely?).
+- **Manifest:** every refused member must appear as `EXCEPTED` with a reason. Check `INV-DOC-*` ID
+  collisions between extracted and skipped rows; the manifest must validate with
+  `riskparse inventory-validate`, and `write_manifest` must never overwrite.
+- **Registration (`--register`):** are members linked to the ZIP through `parent_document_id`? What
+  happens when a member's bytes equal an already-registered document (DUPLICATE), or when two
+  members are identical? Is a naive `--received-at` refused?
+
+### I. Demo, CLI and tests themselves
 - `run_smoke`: can it delete anything other than its own work directory (marker spoofing,
   symlinked workdir, a relative path such as `.`)?
 - Find tests that **pass for the wrong reason**: assertions that are always true, `pytest.raises`
@@ -228,7 +286,9 @@ the status each one gets:
    or *untested*.
 6. **Top 5 fixes to make first**, ordered by risk reduction per hour of work.
 
-Do the independent pass above **before** reading `HANDOFF.md`. Then open `HANDOFF.md` sections 5–6
-and, for each listed defect D-1…D-5 and suspicion S-1…S-13, mark it *confirmed*, *refuted (with
-evidence)* or *not checked*. Findings that match a D-item count only if you found a new variant
-or a wider impact.
+Do the independent pass above **before** reading `HANDOFF.md`. Then open `HANDOFF.md` sections 5–6:
+- **D-1…D-6 and S-1, S-4, S-5, S-13 are marked FIXED.** For each one, report *fix holds* (with the
+  attack you tried) or *fix broken* (with a reproduction). A broken fix counts as a new finding.
+- **S-2, S-3 and S-6…S-12 are still open.** Mark each *confirmed*, *refuted (with evidence)* or
+  *not checked*.
+- Findings that merely restate an open S-item count only if you show a new variant or a wider impact.

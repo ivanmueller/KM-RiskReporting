@@ -24,6 +24,17 @@ or another IT-approved restricted location). The repository's `.gitignore` block
 
 ## Procedure
 
+0. **If the documents arrived as a ZIP**, keep the ZIP unchanged as evidence and run the safe
+   intake first. It hashes the ZIP, extracts it into a new empty folder and writes a manifest
+   in `Contract_Documents` format, with every member linked to the ZIP row `INV-ZIP-0001`.
+   Members it refuses (unsafe paths, links, encrypted) appear as `EXCEPTED` with the reason:
+
+   ```powershell
+   riskparse intake-zip "\\server\share\Risk Reporting\00_Intake\Oct2026_trades.zip" --extract-to "\\server\share\Risk Reporting\00_Intake\Oct2026_extracted" --manifest "\\server\share\Risk Reporting\05_Config\inventory\intake_2026-10.csv"
+   ```
+
+   Then continue with step 2 using the manifest instead of a scan.
+
 1. On the controlled machine, hash each folder **without opening files**:
 
    ```powershell

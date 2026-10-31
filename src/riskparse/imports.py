@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import Connection, insert, select
@@ -32,15 +34,82 @@ _DATE_FIELDS = {"trade_date", "delivery_start", "delivery_end"}
 
 @dataclass(frozen=True)
 class SourceMapping:
-    """Maps normalized field -> source column name, plus the record-ID column."""
+    """Maps normalized field -> source column name, plus the record-ID column.
+
+    ``thousands_separator`` must be declared explicitly (e.g. ``","``) for sources that
+    write ``1,234.50``; otherwise any separator makes the value unparsed. The decimal
+    separator is always ``"."`` - a source using decimal commas needs its own reviewed
+    mapping rather than a guess.
+    """
     record_id_column: str
     columns: dict[str, str]
     parser_version: str
+    thousands_separator: str | None = None
 
     def __post_init__(self):
         unknown = set(self.columns) - set(NORMALIZED_FIELDS)
         if unknown:
             raise ValueError(f"unknown normalized fields in mapping: {sorted(unknown)}")
+        if self.thousands_separator not in (None, ",", " ", "'"):
+            raise ValueError("thousands_separator must be None, ',', ' ' or \"'\"")
+
+
+class SourceFormatError(ValueError):
+    """The source file cannot be imported without losing or guessing data."""
+
+
+class SourceIntegrityError(RuntimeError):
+    """The bytes about to be parsed do not match the registered SHA-256."""
+
+
+def _read_verified_csv(path: Path, expected_sha256: str, mapping: SourceMapping):
+    """Read once into memory, verify the hash, then parse those same bytes.
+
+    Reading once avoids a check-then-use gap where the file could change between
+    the hash check and parsing.
+    """
+    data = path.read_bytes()
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != expected_sha256:
+        raise SourceIntegrityError(
+            f"{path} hashes to {actual}, but the registered document is {expected_sha256}; "
+            "refusing to import bytes that differ from the evidence"
+        )
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise SourceFormatError(
+            f"{path} is not UTF-8 ({exc.reason} at byte {exc.start}). Export as UTF-8, or add "
+            "a reviewed mapping that declares the source encoding - encodings are not guessed."
+        ) from exc
+    reader = csv.reader(io.StringIO(text, newline=""))
+    header = next(reader, None)
+    if not header:
+        raise SourceFormatError(f"{path} has no header row")
+    header = [h.strip() for h in header]
+    dupes = sorted({h for h in header if header.count(h) > 1})
+    if dupes:
+        raise SourceFormatError(f"{path} has duplicate column name(s) {dupes}; values would "
+                                "be overwritten")
+    missing = sorted({mapping.record_id_column, *mapping.columns.values()} - set(header))
+    if missing:
+        raise SourceFormatError(f"{path} is missing mapped column(s) {missing}")
+    rows = []
+    seen: dict[str, int] = {}
+    for row_number, values in enumerate(reader, start=2):
+        if not any(v.strip() for v in values):
+            continue  # blank line
+        if len(values) > len(header):
+            raise SourceFormatError(f"{path} row {row_number} has {len(values)} fields but "
+                                    f"the header has {len(header)}")
+        row = {h: (values[i] if i < len(values) else None) for i, h in enumerate(header)}
+        record_id = (row.get(mapping.record_id_column) or "").strip() or f"ROW{row_number}"
+        if record_id in seen:
+            raise SourceFormatError(f"{path} record id {record_id!r} repeats at rows "
+                                    f"{seen[record_id]} and {row_number}")
+        seen[record_id] = row_number
+        rows.append((row_number, row, record_id))
+    return rows
 
 
 @dataclass(frozen=True)
@@ -51,16 +120,38 @@ class ImportResult:
     already_imported: bool = False
 
 
-def _parse(field: str, raw: str):
+# ASCII-only patterns: Python's \\d would also accept non-Latin digits.
+_PLAIN_DECIMAL = re.compile(r"^[+-]?[0-9]+(\.[0-9]+)?$", re.ASCII)
+_ISO_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$", re.ASCII)
+
+
+def _grouped_decimal(sep: str) -> re.Pattern[str]:
+    s = re.escape(sep)
+    return re.compile(rf"^[+-]?[0-9]{{1,3}}({s}[0-9]{{3}})+(\.[0-9]+)?$", re.ASCII)
+
+
+def _parse(field: str, raw: str, thousands_separator: str | None = None):
+    """Return ``(value, ok)``. Blank -> ``(None, True)``. Anything ambiguous -> not ok.
+
+    Never guesses: ``2,65``, ``1e3``, ``NaN``, ``$2.50``, ``(100)`` and ``10/02/2026``
+    are all reported as unparsed rather than converted.
+    """
     raw = (raw or "").strip()
     if raw == "":
         return None, True
     if field in _DECIMAL_FIELDS:
-        try:
-            return Decimal(raw.replace(",", "")), True
-        except InvalidOperation:
+        text = raw
+        if thousands_separator and _grouped_decimal(thousands_separator).match(raw):
+            text = raw.replace(thousands_separator, "")
+        if not _PLAIN_DECIMAL.match(text):
             return None, False
+        value = Decimal(text)
+        if not value.is_finite():  # defensive; the pattern already excludes NaN/Inf
+            return None, False
+        return value, True
     if field in _DATE_FIELDS:
+        if not _ISO_DATE.match(raw):
+            return None, False
         try:
             return date.fromisoformat(raw), True
         except ValueError:
@@ -89,6 +180,8 @@ def import_csv_source(conn: Connection, *, document_id: str, source_system: str,
         return ImportResult(existing.import_id, existing.row_count or 0, [], True)
 
     path = Path(doc["archive_uri"] or doc["original_path"])
+    rows = _read_verified_csv(path, doc["sha256"], mapping)
+
     import_id = f"IMP-{uuid.uuid4().hex[:16].upper()}"
     conn.execute(insert(source_imports).values(
         import_id=import_id, source_system=source_system, source_owner=source_owner,
@@ -98,24 +191,23 @@ def import_csv_source(conn: Connection, *, document_id: str, source_system: str,
     ))
     unparsed: list[tuple[int, str, str]] = []
     count = 0
-    with path.open(newline="", encoding="utf-8-sig") as fh:
-        for row_number, row in enumerate(csv.DictReader(fh), start=2):
-            raw_json = json.dumps(row, sort_keys=True, ensure_ascii=False)
-            values = {}
-            for field, col in mapping.columns.items():
-                parsed, ok = _parse(field, row.get(col, ""))
-                if not ok:
-                    unparsed.append((row_number, field, row.get(col, "")))
-                values[field] = parsed
-            conn.execute(insert(source_records).values(
-                import_id=import_id,
-                source_record_id=(row.get(mapping.record_id_column) or f"ROW{row_number}"),
-                row_number=row_number,
-                raw_payload=raw_json,
-                raw_payload_sha256=hashlib.sha256(raw_json.encode("utf-8")).hexdigest(),
-                **values,
-            ))
-            count += 1
+    for row_number, row, record_id in rows:
+        raw_json = json.dumps(row, sort_keys=True, ensure_ascii=False)
+        values = {}
+        for field, col in mapping.columns.items():
+            parsed, ok = _parse(field, row.get(col) or "", mapping.thousands_separator)
+            if not ok:
+                unparsed.append((row_number, field, row.get(col) or ""))
+            values[field] = parsed
+        conn.execute(insert(source_records).values(
+            import_id=import_id,
+            source_record_id=record_id,
+            row_number=row_number,
+            raw_payload=raw_json,
+            raw_payload_sha256=hashlib.sha256(raw_json.encode("utf-8")).hexdigest(),
+            **values,
+        ))
+        count += 1
     conn.execute(source_imports.update().where(source_imports.c.import_id == import_id)
                  .values(row_count=count, status="LOADED"))
     audit.record(conn, actor=actor, action="SOURCE_IMPORTED", entity_type="source_import",

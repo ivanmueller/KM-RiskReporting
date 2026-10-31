@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from alembic import command
@@ -24,14 +25,49 @@ def alembic_config(connection: Connection | None = None,
     return cfg
 
 
+class MigrationIntegrityError(RuntimeError):
+    """A migration would leave rows that break a foreign key."""
+
+
+def run_guarded(engine: Engine, fn: Callable[[Connection], None]) -> None:
+    """Run ``fn`` in one transaction, with SQLite foreign-key handling.
+
+    SQLite cannot alter constraints in place, so Alembic batch mode rebuilds tables
+    (create new, copy, DROP old, rename). With ``PRAGMA foreign_keys=ON`` dropping a
+    referenced table fails once rows exist. Per the SQLite documentation, enforcement
+    is switched off for the migration, ``PRAGMA foreign_key_check`` must come back
+    empty **before** commit, and enforcement is switched back on afterwards.
+    Other engines run ``fn`` in a plain transaction.
+    """
+    if engine.dialect.name != "sqlite":
+        with engine.begin() as conn:
+            fn(conn)
+        return
+    with engine.connect() as conn:
+        conn.exec_driver_sql("PRAGMA foreign_keys=OFF")   # no-op inside a transaction
+        conn.commit()
+        if conn.exec_driver_sql("PRAGMA foreign_keys").scalar() != 0:
+            raise MigrationIntegrityError("could not disable SQLite foreign keys")
+        conn.commit()
+        try:
+            with conn.begin():
+                fn(conn)
+                broken = conn.exec_driver_sql("PRAGMA foreign_key_check").all()
+                if broken:
+                    raise MigrationIntegrityError(
+                        f"migration would leave {len(broken)} foreign-key violation(s), e.g. "
+                        f"{broken[:3]}; rolled back")
+        finally:
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+            conn.commit()
+
+
 def upgrade(engine: Engine, revision: str = "head") -> None:
-    with engine.begin() as conn:
-        command.upgrade(alembic_config(conn), revision)
+    run_guarded(engine, lambda conn: command.upgrade(alembic_config(conn), revision))
 
 
 def downgrade(engine: Engine, revision: str) -> None:
-    with engine.begin() as conn:
-        command.downgrade(alembic_config(conn), revision)
+    run_guarded(engine, lambda conn: command.downgrade(alembic_config(conn), revision))
 
 
 def current_revision(engine: Engine) -> str | None:

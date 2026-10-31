@@ -13,6 +13,8 @@ policy-driven statuses are later-phase work. Every decision here is conservative
 * More than one source row from the same import matching one trade is
   ``DUPLICATE_POSSIBLE``.
 * A source row matching no trade is ``UNCONFIRMED`` (deal exists, no confirmation).
+* A booking row missing side, volume or price cannot make a trade ``MATCHED``; the
+  trade is ``UNRESOLVED`` with the missing fields listed.
 """
 
 from __future__ import annotations
@@ -38,9 +40,12 @@ from riskparse.db.schema import (
     trades,
 )
 
-RULES_VERSION = "exact-alias-v0.1"
+RULES_VERSION = "exact-alias-v0.2"
 _ALIAS_FOR_SOURCE = {"EGISTIX": "EGISTIX", "TRADER_SHEET": "TRADER"}
 _BOOKING_SOURCES = ("EGISTIX", "TRADER_SHEET")
+# A booking-source row must carry each of these, or the trade cannot be MATCHED: a
+# reference-only row proves the deal exists, not that its economics agree (handoff S-1).
+_MATERIAL = ("side", "volume_value", "price_value")
 _COMPARED = ("side", "volume_value", "price_value", "trade_date", "delivery_start",
              "delivery_end")
 
@@ -112,10 +117,17 @@ def run_exact_reconciliation(conn: Connection, *, reporting_month: str, cutoff: 
         elif not systems & set(_BOOKING_SOURCES):
             status, severity = "NOT_BOOKED", "CRITICAL"
         else:
-            diffs = _compare(term, t, recs) if term is not None else {
-                "terms": {"problem": "no trade terms recorded"}}
+            if term is not None:
+                diffs, not_compared = _compare(term, t, recs)
+            else:
+                diffs, not_compared = {"terms": {"problem": "no trade terms recorded"}}, {}
             if diffs:
                 status, severity = "MATCHED_BREAK", "HIGH"
+            elif not_compared:
+                status, severity = "UNRESOLVED", "HIGH"
+                for src, fields in sorted(not_compared.items()):
+                    notes.append(f"{src} does not carry material field(s) {fields}; economics "
+                                 "not compared, so the trade cannot be MATCHED")
             elif "EGISTIX" not in systems:
                 status, severity = "UNRESOLVED", "MEDIUM"
                 notes.append("absent from Egistix; Risk to classify (EGISTIX_NOT_APPLICABLE "
@@ -158,7 +170,12 @@ def run_exact_reconciliation(conn: Connection, *, reporting_month: str, cutoff: 
     return run_id
 
 
-def _compare(term, trade, recs) -> dict[str, dict]:
+def _compare(term, trade, recs) -> tuple[dict[str, dict], dict[str, list[str]]]:
+    """Return ``(differences, not_compared)``.
+
+    ``not_compared`` maps ``SYSTEM:record_id`` to the material fields that source row
+    left blank. A blank is never treated as agreement.
+    """
     expected = {
         "side": term["side"],
         "volume_value": term["volume_value"] if term["volume_status"] == "PRESENT"
@@ -170,15 +187,20 @@ def _compare(term, trade, recs) -> dict[str, dict]:
         "delivery_end": term["delivery_end"],
     }
     diffs: dict[str, dict] = {}
+    not_compared: dict[str, list[str]] = {}
     for rec in recs:
+        key = f"{rec['source_system']}:{rec['source_record_id']}"
+        missing = [f for f in _MATERIAL if rec[f] is None]
+        if missing and rec["source_system"] in _BOOKING_SOURCES:
+            not_compared[key] = missing
         for f in _COMPARED:
             got = rec[f]
             if got is None:
-                continue  # source does not carry the field; not evidence of agreement
+                continue  # source does not carry the field; recorded above if material
             if _norm(got) != _norm(expected[f]):
                 diffs.setdefault(f, {"terms": str(expected[f])})[
-                    f"{rec['source_system']}:{rec['source_record_id']}"] = str(got)
-    return diffs
+                    key] = str(got)
+    return diffs, not_compared
 
 
 def _item(conn, run_id, trade_uid, status, severity, method, quality, payload, now) -> int:

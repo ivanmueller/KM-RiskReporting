@@ -15,6 +15,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from riskparse.evidence.hashing import is_sha256_hex
+from riskparse.identity import same_person
 from riskparse.inventory.template import (
     INSTRUCTIONS,
     KIND_DATE,
@@ -151,11 +152,26 @@ class Issue:
         return f"{self.severity:<7} {loc}: {self.message}"
 
 
-def _as_text(v) -> str:
+def _as_text(v, kind: str | None = None) -> str:
+    """Render a cell as text. ``kind`` lets real Excel date cells validate correctly.
+
+    * date column + midnight datetime/date -> ``YYYY-MM-DD``
+    * month column + first-of-month midnight (Excel turns a typed ``2026-10`` into
+      1 Oct 2026) -> ``YYYY-MM``
+    * timestamp column: a date/time cell carries no timezone, so it is rendered
+      without one and fails validation - the user must type the timezone explicitly.
+    """
     if v is None:
         return ""
     if isinstance(v, datetime):
+        midnight = (v.hour, v.minute, v.second, v.microsecond) == (0, 0, 0, 0)
+        if kind == KIND_DATE and midnight:
+            return v.date().isoformat()
+        if kind == KIND_MONTH and midnight and v.day == 1:
+            return v.strftime("%Y-%m")
         return v.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(v, date) and kind == KIND_MONTH and v.day == 1:
+        return v.strftime("%Y-%m")
     if isinstance(v, date):
         return v.isoformat()
     if isinstance(v, float) and v.is_integer():
@@ -236,7 +252,7 @@ def _row_rules(sheet: str, row: dict[str, str], r_i: int, issues: list[Issue]) -
         if not ra or not fa:
             issues.append(Issue(ERROR, sheet, r_i, "interpretation_status",
                                 "APPROVED requires both risk_approver and finance_approver"))
-        elif ra.strip().lower() == fa.strip().lower():
+        elif same_person(ra, fa):
             issues.append(Issue(ERROR, sheet, r_i, "finance_approver",
                                 "Risk and Finance approvers must be different people"))
         if not row.get("approval_date"):
@@ -244,7 +260,7 @@ def _row_rules(sheet: str, row: dict[str, str], r_i: int, issues: list[Issue]) -
                                 "APPROVED requires an approval_date"))
     if sheet == "Trade_Crosswalk":
         kb, vb = row.get("keyed_by", ""), row.get("verified_by", "")
-        if kb and vb and kb.strip().lower() == vb.strip().lower():
+        if same_person(kb, vb):
             issues.append(Issue(ERROR, sheet, r_i, "verified_by",
                                 "independent verifier must differ from keyed_by"))
         ds, de = row.get("delivery_start", ""), row.get("delivery_end", "")
@@ -303,9 +319,10 @@ def read_xlsx(path: str | Path) -> tuple[dict[str, list[dict[str, str]]], dict[s
         while headers and not headers[-1]:
             headers.pop()
         headers_by_sheet[name] = headers
+        kinds = {c.name: c.kind for c in SHEETS_BY_NAME[name].columns}
         rows = []
         for values in it:
-            rows.append({h: _as_text(values[i]) if i < len(values) else ""
+            rows.append({h: _as_text(values[i], kinds.get(h)) if i < len(values) else ""
                          for i, h in enumerate(headers)})
         rows_by_sheet[name] = rows
     wb.close()

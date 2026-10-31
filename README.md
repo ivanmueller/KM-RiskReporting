@@ -40,8 +40,10 @@ src/riskparse/
   db/connection.py          guarded engine creation (sqlite | mssql* | postgresql*)  *unverified
   db/schema.py              portable schema (16 tables)
   db/migrate.py             programmatic Alembic helpers
-  db/migrations/            frozen Alembic migrations (0001_initial)
-  evidence/                 hashing, content-addressed archive, document registry
+  db/migrations/            frozen Alembic migrations (0001_initial, 0002_sod_case_and_zip)
+  identity.py               person-identity normalization for separation-of-duties checks
+  docs_gen.py               generates docs/data_dictionary.md
+  evidence/                 hashing, content-addressed archive, document registry, safe ZIP intake
   inventory/                inventory template definition, xlsx/csv writer, validator, scanner
   reconcile/exact.py        exact-alias reconciliation slice (synthetic demo)
   demo/smoke.py             synthetic end-to-end smoke demo
@@ -107,10 +109,16 @@ Expected: a JSON summary ending in `SMOKE DEMO: PASS`, with statuses
 ## Source inventory (Risk, Week 1)
 
 ```bash
+riskparse intake-zip "<received.zip>" --extract-to "<UNC folder>/Oct2026_extracted" --manifest "<UNC location>/intake_2026-10.csv"
 riskparse inventory-template --out inventory/templates --csv
 riskparse inventory-scan --root "<UNC folder>" --out "<UNC location>/scan.csv"
 riskparse inventory-validate "<completed workbook>.xlsx" --strict
 ```
+
+`intake-zip` hashes the ZIP as received, extracts it safely into a new empty folder (no path
+tricks, no overwrites, no links or encrypted members, zip-bomb limits) and writes an
+inventory manifest. Add `--register` to also record the ZIP and every member in the configured
+database (only with an approved configuration; the local SQLite file is a provisional prototype).
 
 See [`docs/source_inventory_guide.md`](docs/source_inventory_guide.md).
 
@@ -119,6 +127,7 @@ See [`docs/source_inventory_guide.md`](docs/source_inventory_guide.md).
 ```bash
 riskparse --config config/settings.test.toml register-document <file> --channel MANUAL_INTAKE
 riskparse --config config/settings.test.toml audit-verify
+riskparse gen-data-dictionary        # after any schema change
 ```
 
 Publish, rollback, export and scheduling commands from game plan §9.6 do **not** exist yet.

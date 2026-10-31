@@ -35,3 +35,10 @@ def test_inventory_template_and_validate(tmp_path):
 
 def test_demo_smoke_cli(tmp_path):
     assert main(["demo-smoke", "--workdir", str(tmp_path / "demo")]) == 0
+
+
+def test_inventory_validate_rejects_csv_cleanly(tmp_path, capsys):
+    p = tmp_path / "m.csv"
+    p.write_text("a,b\n")
+    assert main(["inventory-validate", str(p)]) == 1
+    assert "workbook" in capsys.readouterr().err

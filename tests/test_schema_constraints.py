@@ -187,3 +187,24 @@ def test_recon_link_needs_exactly_one_source(conn):
 def test_bad_reporting_month_rejected(conn):
     with pytest.raises(IntegrityError):
         _pub(conn, reporting_month="Oct-26")
+
+
+# --- Regression tests: D-4 (case-insensitive separation of duties) ------------------
+
+@pytest.mark.parametrize("approver", ["Analyst", "ANALYST", "analyst"])
+def test_d4_case_variant_self_approval_rejected_by_db(conn, approver):
+    with pytest.raises(IntegrityError):
+        _pub(conn, approved_by=approver, approved_at_utc=NOW)
+
+
+def test_d4_audit_case_variant_rejected_by_db(conn):
+    from sqlalchemy import text
+    with pytest.raises(IntegrityError):
+        conn.execute(text(
+            "INSERT INTO audit_events (occurred_at_utc, actor, approver, action, entity_type, "
+            "entity_id, event_hash) VALUES ('2026-10-31 00:00:00', 'Pat', 'pat', 'X', 'x', "
+            "'1', :h)"), {"h": "f" * 64})
+
+
+def test_zip_file_type_allowed(conn):
+    _doc(conn, file_type="ZIP")

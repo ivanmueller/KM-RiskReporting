@@ -101,6 +101,10 @@ def cmd_inventory_template(args) -> int:
 
 def cmd_inventory_validate(args) -> int:
     from riskparse.inventory.workbook import ERROR, MISSING, validate_xlsx
+    if Path(args.path).suffix.lower() not in (".xlsx", ".xlsm"):
+        print("inventory-validate checks the completed .xlsx workbook; paste scan/manifest CSV "
+              "rows into the workbook first", file=sys.stderr)
+        return 1
     issues = validate_xlsx(args.path)
     for i in issues:
         print(i)
@@ -123,6 +127,50 @@ def cmd_inventory_scan(args) -> int:
     print(f"{len(rows)} file(s) hashed -> {out}")
     for f in findings:
         print(f"{f.kind}: {f.detail}")
+    return 0
+
+
+def cmd_intake_zip(args) -> int:
+    from datetime import datetime
+
+    from riskparse.evidence.intake_zip import (
+        manifest_rows,
+        register_intake,
+        safe_extract,
+        write_manifest,
+    )
+    result = safe_extract(args.zip, args.extract_to)
+    print(f"ZIP {result.zip_path} sha256={result.zip_sha256} size={result.zip_size_bytes}")
+    print(f"extracted {len(result.members)} member(s) to {result.extract_dir}; "
+          f"refused {len(result.skipped)}")
+    for f in result.findings:
+        print(f"{f.kind}: {f.member} - {f.detail}")
+    rows = manifest_rows(result, inventoried_by=args.by or getpass.getuser(),
+                         inventoried_date=date.today().isoformat())
+    print("manifest:", write_manifest(rows, args.manifest))
+    if args.register:
+        from riskparse.db.connection import create_db_engine
+        received = datetime.fromisoformat(args.received_at) if args.received_at else None
+        s = _settings(args)
+        engine = create_db_engine(s)
+        try:
+            with engine.begin() as conn:
+                zip_reg, regs = register_intake(
+                    conn, result, actor=args.by or getpass.getuser(),
+                    source_channel=args.channel, archive_root=s.paths.archive_root,
+                    sender=args.sender, received_at=received)
+        finally:
+            engine.dispose()
+        print(f"registered ZIP as {zip_reg.document_id} ({zip_reg.outcome})")
+        for r in regs:
+            print(f"  {r.outcome:<9} {r.document_id} {r.sha256[:12]}")
+    return 0
+
+
+def cmd_gen_data_dictionary(args) -> int:
+    from riskparse.docs_gen import render
+    Path(args.out).write_text(render(), encoding="utf-8")
+    print("wrote", args.out)
     return 0
 
 
@@ -177,6 +225,24 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--by", help="inventoried_by name")
     sc.set_defaults(func=cmd_inventory_scan)
 
+    iz = sub.add_parser("intake-zip", help="hash a received ZIP, extract it safely and write "
+                                           "an inventory manifest")
+    iz.add_argument("zip")
+    iz.add_argument("--extract-to", required=True, help="new or empty folder (keep on L drive)")
+    iz.add_argument("--manifest", required=True, help="CSV to create (never overwritten)")
+    iz.add_argument("--by", help="inventoried_by / actor name")
+    iz.add_argument("--register", action="store_true",
+                    help="also register the ZIP and members in the configured database")
+    iz.add_argument("--channel", default="EMAIL_ZIP")
+    iz.add_argument("--sender")
+    iz.add_argument("--received-at", help="ISO timestamp WITH offset, e.g. "
+                                          "2026-11-02T09:15-07:00")
+    iz.set_defaults(func=cmd_intake_zip)
+
+    gd = sub.add_parser("gen-data-dictionary", help="regenerate docs/data_dictionary.md")
+    gd.add_argument("--out", default="docs/data_dictionary.md")
+    gd.set_defaults(func=cmd_gen_data_dictionary)
+
     dm = sub.add_parser("demo-smoke", help="run the synthetic end-to-end smoke demo")
     dm.add_argument("--workdir", default="var/demo")
     dm.set_defaults(func=cmd_demo_smoke)
@@ -189,9 +255,13 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except Exception as exc:  # surface a clean message; tracebacks with --debug later
         from riskparse.config import ConfigError
+        from riskparse.evidence.intake_zip import ZipIntakeError
         if isinstance(exc, ConfigError):
             print(f"configuration refused: {exc}", file=sys.stderr)
             return 3
+        if isinstance(exc, ZipIntakeError | FileExistsError):
+            print(f"intake refused: {exc}", file=sys.stderr)
+            return 4
         raise
 
 

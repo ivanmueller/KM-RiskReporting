@@ -182,3 +182,33 @@ def test_scan_hashes_flags_duplicates_and_revisions(tmp_path):
     data["Contract_Documents"] = rows_csv
     errs = [i for i in validate_rows(data) if i.severity == ERROR]
     assert errs == []
+
+
+# --- Regression tests: D-3 (real Excel date cells) -----------------------------------
+
+def _fill_workbook_with_excel_dates(path):
+    from datetime import datetime as dt
+
+    from openpyxl import load_workbook as lw
+    wb = lw(path)
+    ws = wb["Trader_Sheets"]
+    hdr = [c.value for c in ws[1]]
+    ws.cell(row=2, column=hdr.index("period_covered") + 1, value=dt(2026, 10, 1))
+    ws.cell(row=2, column=hdr.index("as_of_timestamp") + 1, value=dt(2026, 11, 3, 9, 15))
+    ws = wb["Contract_Documents"]
+    hdr = [c.value for c in ws[1]]
+    ws.cell(row=2, column=hdr.index("doc_inventory_id") + 1, value="D1")
+    ws.cell(row=2, column=hdr.index("trade_date") + 1, value=dt(2026, 10, 5))
+    ws.cell(row=2, column=hdr.index("received_date") + 1, value=dt(2026, 10, 5, 14, 30))
+    wb.save(path)
+
+
+def test_d3_excel_date_cells_validate(tmp_path):
+    p = write_xlsx_template(tmp_path / "t.xlsx")
+    _fill_workbook_with_excel_dates(p)
+    issues = validate_xlsx(p)
+    errs = {(i.sheet, i.column) for i in issues if i.severity == ERROR}
+    assert ("Contract_Documents", "trade_date") not in errs         # midnight date cell OK
+    assert ("Trader_Sheets", "period_covered") not in errs          # Excel month cell OK
+    assert ("Contract_Documents", "received_date") in errs          # has a time: not a date
+    assert ("Trader_Sheets", "as_of_timestamp") in errs             # no timezone: refused

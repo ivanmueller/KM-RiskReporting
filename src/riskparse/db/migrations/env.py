@@ -11,6 +11,7 @@ from alembic import context
 
 from riskparse.config import load_settings
 from riskparse.db.connection import create_db_engine
+from riskparse.db.migrate import run_guarded
 from riskparse.db.schema import metadata
 
 config = context.config
@@ -35,9 +36,22 @@ def run_migrations_online() -> None:
         return
     settings = load_settings(config.attributes.get("riskparse_config_path"))
     engine = create_db_engine(settings)
-    with engine.connect() as conn:
-        _run(conn)
-    engine.dispose()
+    try:
+        # Same SQLite foreign-key handling as `riskparse db-upgrade`.
+        run_guarded(engine, _run_nested)
+    finally:
+        engine.dispose()
+
+
+def _run_nested(connection) -> None:
+    # Called with a connection that is already inside a transaction.
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        render_as_batch=connection.dialect.name == "sqlite",
+        compare_type=True,
+    )
+    context.run_migrations()
 
 
 if context.is_offline_mode():

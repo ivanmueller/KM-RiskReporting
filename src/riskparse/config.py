@@ -18,6 +18,7 @@ Safety rules enforced here (game plan sections 3.1, 13.1, 13.2):
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,7 +33,11 @@ ENVIRONMENTS = ("local", "test", "dev", "prod")
 SQLITE_ENVIRONMENTS = ("local", "test")
 AUTH_MODES = ("integrated", "env_password")
 
-_FORBIDDEN_KEYS = {"password", "pwd", "secret", "connection_string", "url"}
+_FORBIDDEN_KEYS = {"password", "pwd", "secret", "connection_string", "url", "dsn"}
+# Any key containing these words is treated as a credential (``*_env`` names excepted,
+# because they hold the NAME of an environment variable, not a value).
+_FORBIDDEN_WORDS = ("password", "passwd", "pwd", "secret", "token", "credential",
+                    "apikey", "api_key")
 
 
 class ConfigError(ValueError):
@@ -96,7 +101,11 @@ class Settings:
 
 
 def _check_forbidden(section: str, data: dict[str, Any]) -> None:
-    bad = sorted(k for k in data if k.lower() in _FORBIDDEN_KEYS)
+    bad = sorted(
+        k for k in data
+        if k.lower() in _FORBIDDEN_KEYS
+        or (any(word in k.lower() for word in _FORBIDDEN_WORDS) and not k.endswith("_env"))
+    )
     if bad:
         raise ConfigError(
             f"[{section}] contains forbidden key(s) {bad}. Credentials and full connection "
@@ -105,24 +114,69 @@ def _check_forbidden(section: str, data: dict[str, Any]) -> None:
         )
 
 
+_KNOWN_SECTIONS = ("environment", "database", "paths")
+
+# Exact TOML types required for every key. bool is checked before int because
+# bool is a subclass of int in Python (``port = true`` must be rejected).
+_DB_TYPES: dict[str, tuple[type, bool]] = {   # key -> (type, may be omitted/None)
+    "backend": (str, False), "sqlite_path": (str, False), "host": (str, True),
+    "port": (int, True), "database": (str, True), "schema": (str, True),
+    "odbc_driver": (str, True), "authentication": (str, False),
+    "username_env": (str, False), "password_env": (str, False),
+    "encrypt": (bool, False), "trust_server_certificate": (bool, False),
+    "authorized": (bool, False),
+}
+_ENV_TYPES: dict[str, tuple[type, bool]] = {"name": (str, False)}
+_PATHS_TYPES: dict[str, tuple[type, bool]] = {"archive_root": (str, False)}
+# Characters that would let a value smuggle extra connection-string attributes
+# or credentials (``user:pw@host``, ``DRIVER=x;PWD=y``).
+_INJECTION_CHARS = ("@", ";", "=", "://", "{", "}")
+_ENV_VAR_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+
+
+def _check_types(section: str, data: dict[str, Any],
+                 spec: dict[str, tuple[type, bool]]) -> None:
+    unknown = sorted(set(data) - set(spec))
+    if unknown:
+        raise ConfigError(f"[{section}] has unknown key(s): {unknown}")
+    for key, value in data.items():
+        expected, _optional = spec[key]
+        if expected is bool:
+            ok = isinstance(value, bool)
+        elif expected is int:
+            ok = isinstance(value, int) and not isinstance(value, bool)
+        else:
+            ok = isinstance(value, expected)
+        if not ok:
+            raise ConfigError(
+                f"[{section}] {key} must be a TOML {expected.__name__}, got "
+                f"{type(value).__name__} {value!r}. (Quoted values such as \"false\" are "
+                "strings and are not accepted for booleans.)"
+            )
+
+
 def _build(data: dict[str, Any], source: str | None) -> Settings:
-    env_section = data.get("environment", {}) or {}
-    db_section = data.get("database", {}) or {}
-    paths_section = data.get("paths", {}) or {}
-    for name, sec in (("environment", env_section), ("database", db_section),
-                      ("paths", paths_section)):
+    if not isinstance(data, dict):
+        raise ConfigError("configuration root must be a table")
+    stray = sorted(k for k in data if k not in _KNOWN_SECTIONS)
+    if stray:
+        raise ConfigError(f"unknown top-level key(s)/section(s): {stray}")
+    sections = {}
+    for name in _KNOWN_SECTIONS:
+        sec = data.get(name, {})
+        if sec is None:
+            sec = {}
         if not isinstance(sec, dict):
             raise ConfigError(f"[{name}] must be a table")
         _check_forbidden(name, sec)
+        sections[name] = sec
+    _check_types("environment", sections["environment"], _ENV_TYPES)
+    _check_types("database", sections["database"], _DB_TYPES)
+    _check_types("paths", sections["paths"], _PATHS_TYPES)
 
-    known_db = set(DatabaseConfig.__dataclass_fields__)
-    unknown = sorted(set(db_section) - known_db)
-    if unknown:
-        raise ConfigError(f"[database] has unknown key(s): {unknown}")
-
-    env_name = str(env_section.get("name", "local"))
-    db = DatabaseConfig(**db_section)
-    paths = PathsConfig(**paths_section)
+    env_name = sections["environment"].get("name", "local")
+    db = DatabaseConfig(**sections["database"])
+    paths = PathsConfig(**sections["paths"])
     settings = Settings(environment=env_name, database=db, paths=paths, source_file=source)
     validate(settings)
     return settings
@@ -147,6 +201,19 @@ def validate(settings: Settings) -> None:
             raise ConfigError("database.sqlite_path is required for sqlite")
         return
     # server backends
+    if db.port is not None and not 1 <= db.port <= 65535:
+        raise ConfigError("database.port must be between 1 and 65535")
+    for key in ("host", "database", "schema", "odbc_driver"):
+        value = getattr(db, key)
+        if value is not None and any(ch in value for ch in _INJECTION_CHARS):
+            raise ConfigError(
+                f"database.{key} contains a character that could embed credentials or extra "
+                f"connection attributes ({', '.join(_INJECTION_CHARS)})"
+            )
+    for key in ("username_env", "password_env"):
+        if not _ENV_VAR_NAME.match(getattr(db, key)):
+            raise ConfigError(f"database.{key} must be an environment variable NAME, "
+                              "not a value")
     if db.authentication not in AUTH_MODES:
         raise ConfigError(f"database.authentication must be one of {AUTH_MODES}")
     for required in ("host", "database"):

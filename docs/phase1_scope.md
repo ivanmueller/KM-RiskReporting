@@ -23,6 +23,12 @@ real data or a confirmed SQL engine).
 | Synthetic end-to-end smoke demo | `src/riskparse/demo/smoke.py`, `tests/test_smoke_e2e.py` | §3 |
 | SQL confirmation checklist, blockers register, inventory guide | `docs/` | §14.2, §16 |
 
+## Follow-up fixes (after Phase 1 handoff)
+
+Defects D-1 to D-5 and suspicions S-1, S-4, S-5 and S-13 from `HANDOFF.md` were fixed with
+regression tests. Migration `0002_sod_case_and_zip` was added, along with safe ZIP intake
+(`riskparse intake-zip`) and the data-dictionary generator. See `ROADMAP.md` (B1–B8).
+
 ## Controls demonstrated by tests
 
 - Identity from bytes only; filename never becomes `document_id`.

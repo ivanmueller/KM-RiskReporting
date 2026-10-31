@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import Connection, insert, select
 
 from riskparse.db.schema import audit_events
+from riskparse.identity import normalize_actor
 
 _HASHED_FIELDS = (
     "occurred_at_utc", "actor", "approver", "action", "entity_type", "entity_id",
@@ -52,8 +53,11 @@ def record(conn: Connection, *, actor: str, action: str, entity_type: str, entit
     """Append an audit event and return its hash."""
     if not actor:
         raise ValueError("audit events require an actor")
-    if approver is not None and approver == actor:
-        raise ValueError("approver must differ from actor (separation of duties)")
+    actor = normalize_actor(actor)
+    if approver is not None:
+        approver = normalize_actor(approver)
+        if approver == actor:
+            raise ValueError("approver must differ from actor (separation of duties)")
     ts = (occurred_at or datetime.now(UTC)).astimezone(UTC).replace(microsecond=0)
     prev = conn.execute(
         select(audit_events.c.event_hash).order_by(audit_events.c.event_id.desc()).limit(1)

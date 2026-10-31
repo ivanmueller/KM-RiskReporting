@@ -396,7 +396,8 @@ publication_runs = Table(
     CheckConstraint(_in("status", vocab.PUBLICATION_STATUSES), name="status"),
     CheckConstraint(f"reporting_month LIKE '{MONTH_LIKE}'", name="month_fmt"),
     # Separation of duties: the creator of a candidate cannot be its approver.
-    CheckConstraint("approved_by IS NULL OR approved_by <> created_by", name="approver_sod"),
+    CheckConstraint("approved_by IS NULL OR LOWER(approved_by) <> LOWER(created_by)",
+                    name="approver_sod"),
     CheckConstraint("status NOT IN ('APPROVED', 'PUBLISHED', 'SUPERSEDED') OR "
                     "(approved_by IS NOT NULL AND approved_at_utc IS NOT NULL)",
                     name="approved_has_approver"),
@@ -484,7 +485,7 @@ audit_events = Table(
     Column("prev_event_hash", String(64), nullable=True),
     Column("event_hash", String(64), nullable=False),
     UniqueConstraint("event_hash"),
-    CheckConstraint("approver IS NULL OR approver <> actor", name="approver_sod"),
+    CheckConstraint("approver IS NULL OR LOWER(approver) <> LOWER(actor)", name="approver_sod"),
     Index("ix_audit_events_entity", "entity_type", "entity_id"),
 )
 

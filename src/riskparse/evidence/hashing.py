@@ -19,6 +19,7 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 EXTENSION_FILE_TYPES = {
     ".pdf": "PDF", ".xlsx": "XLSX", ".xls": "XLS", ".xlsm": "XLSM", ".csv": "CSV",
     ".eml": "EML", ".msg": "MSG", ".docx": "DOCX", ".tif": "TIFF", ".tiff": "TIFF",
+    ".zip": "ZIP",
 }
 
 

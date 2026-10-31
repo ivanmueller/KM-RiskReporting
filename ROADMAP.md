@@ -1,7 +1,7 @@
 # Roadmap and task tracker
 
 Source: *Risk Reporting Automation — Project Game Plan v2.0*, §1.3 (stages), §14 (weeks),
-§14.2 (Week 1 actions), §17 (sign-off gates). Last updated **2026-10-31**.
+§14.2 (Week 1 actions), §17 (sign-off gates). Last updated **2026-10-31** (after the B-fixes).
 
 **Legend:** `[x]` done · `[~]` partly done (the note says what is left) · `[ ]` not started ·
 **(blocked: B-xx)** see `docs/blockers.md` · **(owner)** people other than the developer.
@@ -16,7 +16,7 @@ for a gate that needs real data or sign-off.
 
 - **Stage 1, Phase 1 (foundation):** done.
 - **Week 1 discovery:** in progress. The October trade zip has been received and needs to be inventoried.
-- **Next engineering work:** fix defects D-1 and D-2 before any real data goes through the import code.
+- **Engineering:** B1–B5, B7 and B8 are done (226 tests). Next: run the Codex review (B6) and triage what it finds.
 
 ## NOW — next actions (in order)
 
@@ -25,18 +25,16 @@ for a gate that needs real data or sign-off.
 - [ ] **A1. Keep the zip off GitHub and out of unapproved AI tools.** Store the original zip, unchanged, in the restricted
   L drive location, or a local folder **outside** this repo until IT gives the UNC path. Don't
   upload it to GitHub or to a cloud AI session (that includes this one) unless security has approved it (B-10).
-- [ ] **A2. Record the zip itself as evidence:** take its SHA-256, size, who received it, from whom, and when
-  (`Get-FileHash <zip> -Algorithm SHA256`, or
-  `riskparse register-document <zip> --channel EMAIL_ZIP` against the test DB).
-- [ ] **A3. List the contents without opening any file:** `tar -tf <zip>` or `unzip -l <zip>`. Note the file
-  count and types, and look for macro-enabled files (`.xlsm`, `.docm`), nested zips and odd paths (`..`).
-- [ ] **A4. Extract into a new empty folder** next to the zip (a working copy). Keep the original zip as the
-  evidence copy. Don't enable macros or editing when you open anything.
-- [ ] **A5. Hash everything:** `riskparse inventory-scan --root <extracted folder> --out <L-drive>\scan_2026-10.csv`.
-  Review the `DUPLICATE_CONTENT` and `SAME_NAME_DIFFERENT_CONTENT` findings.
+- [ ] **A2. Note who sent the zip, and when.** You'll record this on the inventory row for the zip.
+- [ ] **A3–A5. Run the safe intake** (tooling ready, B8). This one command hashes the zip as received, extracts it into a
+  new empty folder, hashes every file, refuses unsafe paths, links and encrypted members, flags macro-enabled
+  files, nested zips, duplicate names and case collisions, and writes an inventory manifest:
+  `riskparse intake-zip <zip> --extract-to <L-drive>\Oct2026_extracted --manifest <L-drive>\intake_2026-10.csv`
+  Keep the original zip as the evidence copy. Don't enable macros or editing when you open anything.
+  Review every finding the command prints.
 - [ ] **A6. Fill in the inventory workbook** (`inventory/templates/October_2026_Source_Inventory_TEMPLATE.xlsx`,
   saved as a working copy on the L drive):
-  - paste the scan rows into `Contract_Documents`;
+  - paste the manifest rows into `Contract_Documents` (the zip is row `INV-ZIP-0001`; refused members appear as `EXCEPTED`);
   - classify each one **from its content**, not from its filename;
   - flag scans, emails and amendments.
 - [ ] **A7. Count and size the work:** documents per format (PDF text / PDF scan / Excel / `.msg` / `.eml`) and
@@ -51,14 +49,14 @@ for a gate that needs real data or sign-off.
 
 ### B. Engineering (no real data needed)
 
-- [ ] **B1. Fix D-1:** type-check every config field, so that `authorized = "false"` can't let a connection through. Add a regression test.
-- [ ] **B2. Fix D-2:** strict decimal parsing, so that `"2,65"`, `NaN` and `Infinity` are rejected rather than turned into numbers. Add a regression test.
-- [ ] **B3. Fix D-3:** accept real Excel date cells in the inventory validator.
-- [ ] **B4. Fix D-4:** make the creator/approver identity checks case-insensitive.
-- [ ] **B5. Fix D-5:** reject unknown config keys and sections cleanly.
-- [ ] **B6. Run the Codex review** (`docs/review/codex_stress_test_prompt.md`) and triage its findings into `HANDOFF.md`.
-- [ ] **B7. Fix S-1** (a row compared on nothing must not be `MATCHED`) and **S-4** (re-check the file hash before importing).
-- [ ] **B8. Add a safe "register intake zip" command:** hash the zip, extract it without zip-slip,
+- [x] **B1. Fix D-1:** type-check every config field, so that `authorized = "false"` can't let a connection through. Add a regression test.
+- [x] **B2. Fix D-2:** strict decimal parsing, so that `"2,65"`, `NaN` and `Infinity` are rejected rather than turned into numbers. Add a regression test.
+- [x] **B3. Fix D-3:** accept real Excel date cells in the inventory validator.
+- [x] **B4. Fix D-4:** make the creator/approver identity checks case-insensitive. *(identity normalization plus migration `0002`; also fixed D-6, a migration failure on SQLite databases holding linked rows)*
+- [x] **B5. Fix D-5:** reject unknown config keys and sections cleanly.
+- [ ] **B6. Run the Codex review** (you run it; prompt updated for the fixes) (`docs/review/codex_stress_test_prompt.md`) and triage its findings into `HANDOFF.md`.
+- [x] **B7. Fix S-1** (a row compared on nothing must not be `MATCHED`) and **S-4** (re-check the file hash before importing). *Also fixed S-5 (CSV shape errors) and S-13 (data dictionary generator).*
+- [x] **B8. Add a safe "register intake zip" command** (`riskparse intake-zip`, with `--register` to also write to the DB): hash the zip, extract it without zip-slip,
   register each member with `parent_document_id` pointing at the zip, and record nested archives as exceptions.
 
 ### C. IT / owners (in parallel)
@@ -79,22 +77,23 @@ for a gate that needs real data or sign-off.
 - [x] Inspect the project folder and game plan (the repo was empty)
 - [x] Modular package `riskparse`, `pyproject.toml`, pinned `requirements/lock.txt`, CLI
 - [x] `.gitignore` that keeps confidential files out, plus tests that check it
-- [x] Config with credential and production guards *(defect D-1 still open, see B1)*
+- [x] Config with credential and production guards *(D-1 and D-5 fixed)*
 - [x] Connection layer: SQLite test adapter; SQL Server/PostgreSQL candidates that refuse to connect unless authorized *(the candidates are unverified)*
-- [x] Minimal schema (16 tables) and frozen migration `0001_initial`; upgrade/downgrade tested; matches the schema definition
-- [x] Data dictionary (`docs/data_dictionary.md`)
+- [x] Minimal schema (16 tables) and frozen migrations `0001_initial` and `0002_sod_case_and_zip`; upgrade/downgrade tested; matches the schema definition, including CHECK text
+- [x] Data dictionary (`docs/data_dictionary.md`), generated by `riskparse gen-data-dictionary` and drift-tested
 - [x] SHA-256 identity, stable-file check, content-addressed archive, duplicate vs revision detection
 - [x] Hash-chained audit events and `audit-verify`
 - [x] Source-inventory template (xlsx + csv), validator, read-only folder scanner
-- [x] CSV source import that keeps raw rows unchanged *(D-2 still open, see B2)*
+- [x] CSV source import that keeps raw rows unchanged, with strict parsing and a hash re-check *(D-2, S-4, S-5 fixed)*
+- [x] Safe intake of a received ZIP (`intake-zip`)
 - [x] Exact-reference reconciliation slice
 - [x] End-to-end smoke demo on synthetic data (candidate only, never published)
 - [x] Docs: scope, SQL checklist, inventory guide, blockers, `HANDOFF.md`, review prompt
-- [x] 97 tests passing, `ruff` clean, setup verified in a clean environment
+- [x] 226 tests passing, `ruff` clean, setup verified in a clean environment
 
 ### Week 1 (Nov 2–6) — Discovery and economic scope
 
-- [~] Inventory of October files and trades. *Done: template, scanner and validator. Left: actually filling it in from the zip (A1–A10).*
+- [~] Inventory of October files and trades. *Done: template, scanner, zip intake and validator. Left: actually filling it in from the zip (A1–A10).*
 - [ ] Every trader's sources enumerated (C4)
 - [ ] Egistix columns and coverage documented (C3)
 - [~] SQL environment and access. *Done: the IT checklist. Left: IT's answers (C1).*
@@ -107,7 +106,7 @@ for a gate that needs real data or sign-off.
 **Week 1 actions (§14.2):**
 
 - [~] 1. Confirm SQL engine, edition, server, owner, test/prod split, service identity and backups. *Checklist written; waiting on IT.*
-- [~] 2. Inventory every October contract, including scans, emails, amendments and pre-October evergreens. *Zip received; A1–A8.*
+- [~] 2. Inventory every October contract, including scans, emails, amendments and pre-October evergreens. *Zip received; `intake-zip` ready; A1–A8.*
 - [ ] 3. Get dated Egistix exports and all 2–3 trader sheets; document what Egistix does not contain
 - [ ] 4. Select the evergreen agreements and analyse their clauses (AI only in an approved environment; otherwise manual)
 - [ ] 5. Hand-key the material fields of all ~35 October trades (A9)
@@ -117,7 +116,7 @@ for a gate that needs real data or sign-off.
 ### Week 2 (Nov 9–13) — L drive workflow and SQL base
 
 - [ ] L drive folders and permissions created by IT (C2)
-- [~] Evidence hash registry. *Built and tested on synthetic data; still needs a real UNC archive.*
+- [~] Evidence hash registry. *Built and tested on synthetic data, including ZIP intake with members linked to the ZIP; still needs a real UNC archive.*
 - [~] Intake and approval events. *Done: audit events. Left: the accept/reject/approve workflow.*
 - [~] Minimal SQL migrations. *Done: portable migration. Left: run it on the confirmed engine, then roles, DENY and locks.*
 - [x] Audit and source-ID model
@@ -136,7 +135,7 @@ for a gate that needs real data or sign-off.
 
 ### Week 4 (Nov 23–27) — Reconcile and verify
 
-- [~] Matching. *Done: exact references. Left: composite matching, amendment chains, duplicate detection.*
+- [~] Matching. *Done: exact references; a trade can't be MATCHED without side, volume and price compared. Left: composite matching, amendment chains, duplicate detection, month scoping (S-2).*
 - [ ] Imports of every trader sheet and of Egistix, with real data
 - [ ] Break report and exception owners/aging
 - [ ] Full manual verification of material terms for every October trade **(Risk)**

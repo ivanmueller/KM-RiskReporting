@@ -1,6 +1,7 @@
 import os
 import stat
 
+import pytest
 from sqlalchemy import func, select, text
 
 from riskparse import audit
@@ -12,6 +13,7 @@ from riskparse.evidence.registry import (
     register_document,
     verify_archive,
 )
+from riskparse.identity import InvalidIdentity, normalize_actor, same_person
 
 
 def _reg(conn, path, tmp_path, **kw):
@@ -86,7 +88,27 @@ def test_audit_chain_detects_deleted_event(conn):
 
 
 def test_audit_requires_independent_approver(conn):
-    import pytest
     with pytest.raises(ValueError, match="separation"):
         audit.record(conn, actor="same", approver="same", action="T", entity_type="x",
                      entity_id="1")
+
+
+# --- Regression tests: D-4 at the application layer ---------------------------------
+
+@pytest.mark.parametrize("a,b", [("Pat", "pat"), ("pat ", "PAT"), ("Pat  Smith", "pat smith"),
+                                 ("ＰＡＴ", "pat")])
+def test_d4_spelling_variants_are_the_same_person(conn, a, b):
+    assert same_person(a, b)
+    with pytest.raises(ValueError, match="separation"):
+        audit.record(conn, actor=a, approver=b, action="T", entity_type="x", entity_id="1")
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "pat\u200b", "pa\x00t", "x" * 101])
+def test_invalid_identities_rejected(bad):
+    with pytest.raises(InvalidIdentity):
+        normalize_actor(bad)
+
+
+def test_audit_stores_normalized_actor(conn):
+    audit.record(conn, actor="  Risk.Analyst ", action="T", entity_type="x", entity_id="1")
+    assert conn.execute(select(audit_events.c.actor)).scalar() == "risk.analyst"
