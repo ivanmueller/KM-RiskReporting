@@ -243,8 +243,9 @@ requirement 12:
   is a symlink to elsewhere; a ZIP that changes between hashing and reading (TOCTOU); a crash
   mid-extraction (what is left on disk, and does a retry refuse safely?).
 - **Manifest:** every refused member must appear as `EXCEPTED` with a reason. Check `INV-DOC-*` ID
-  collisions between extracted and skipped rows; the manifest must validate with
-  `riskparse inventory-validate`, and `write_manifest` must never overwrite.
+  collisions between extracted and skipped rows. Once pasted into the inventory workbook, the
+  manifest rows must pass `riskparse inventory-validate` with no ERROR (see
+  `tests/test_intake_zip.py` for the in-memory equivalent), and `write_manifest` must never overwrite.
 - **Registration (`--register`):** are members linked to the ZIP through `parent_document_id`? What
   happens when a member's bytes equal an already-registered document (DUPLICATE), or when two
   members are identical? Is a naive `--received-at` refused?
@@ -282,7 +283,7 @@ requirement 12:
 3. **Reproduction code**: every new `tests/review/test_review_*.py` or `review_scratch/*` file,
    listed with the exact command to run it and its failing output.
 4. **Unconfirmed suspicions**: listed separately, with why each could not be reproduced.
-5. **Spec-violation map**: for each of guarantees 1–11 above, mark *held*, *violated (finding #)*
+5. **Spec-violation map**: for each of guarantees 1–12 above, mark *held*, *violated (finding #)*
    or *untested*.
 6. **Top 5 fixes to make first**, ordered by risk reduction per hour of work.
 
