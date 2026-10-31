@@ -64,3 +64,7 @@ PUBLICATION_STATUSES = (
 )
 
 EVERGREEN_INTERPRETATION = ("UNRESOLVED", "PROPOSED", "APPROVED", "REJECTED")
+
+# Text extraction outcome per document (migration 0003). See riskparse.extract.base.
+EXTRACTION_STATUSES = ("TEXT_EXTRACTED", "PARTIAL_TEXT", "NEEDS_OCR", "ENCRYPTED",
+                       "UNSUPPORTED", "FAILED")

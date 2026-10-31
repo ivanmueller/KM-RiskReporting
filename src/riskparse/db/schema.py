@@ -31,6 +31,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.sql.elements import conv
 from sqlalchemy.types import TypeDecorator
 
 from riskparse import vocab
@@ -460,6 +461,45 @@ active_publication = Table(
     Column("updated_at_utc", UTCDateTime(), nullable=True),
     Column("updated_by", String(100), nullable=True),
     CheckConstraint("slot = 'ACTIVE'", name="single_slot"),
+)
+
+# ---------------------------------------------------------------------------
+# Text extraction (migration 0003): raw text segments with evidence locations.
+# No economic interpretation is stored here.
+# ---------------------------------------------------------------------------
+document_extractions = Table(
+    "document_extractions",
+    metadata,
+    Column("extraction_id", Integer, primary_key=True, autoincrement=True),
+    Column("document_id", String(40), ForeignKey("source_documents.document_id"),
+           nullable=False),
+    Column("extractor", String(40), nullable=False),
+    Column("extractor_version", String(20), nullable=False),
+    Column("status", String(20), nullable=False),
+    Column("segment_count", Integer, nullable=False),
+    Column("text_sha256", String(64), nullable=False),
+    Column("metadata_json", Text, nullable=True),
+    Column("warnings_json", Text, nullable=True),
+    Column("extracted_by", String(100), nullable=False),
+    Column("extracted_at_utc", UTCDateTime(), nullable=False),
+    UniqueConstraint("document_id", "extractor", "extractor_version",
+                     name=conv("uq_document_extractions_doc_version")),
+    CheckConstraint(_in("status", vocab.EXTRACTION_STATUSES), name="status"),
+    CheckConstraint("segment_count >= 0", name="segment_count_nonneg"),
+)
+
+document_segments = Table(
+    "document_segments",
+    metadata,
+    Column("extraction_id", Integer, ForeignKey("document_extractions.extraction_id"),
+           nullable=False),
+    Column("seq", Integer, nullable=False),
+    Column("location", String(200), nullable=False),
+    Column("kind", String(30), nullable=False),
+    Column("text", Text, nullable=False),
+    Column("meta_json", Text, nullable=True),
+    PrimaryKeyConstraint("extraction_id", "seq"),
+    CheckConstraint("seq >= 1", name="seq_pos"),
 )
 
 # ---------------------------------------------------------------------------

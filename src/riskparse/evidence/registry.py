@@ -156,3 +156,28 @@ def verify_archive(conn: Connection) -> list[tuple[str, str]]:
         except archive.ArchiveIntegrityError as exc:
             problems.append((r.document_id, str(exc)))
     return problems
+
+
+class EvidenceIntegrityError(RuntimeError):
+    """Stored bytes no longer match the registered SHA-256."""
+
+
+def read_verified_bytes(doc: dict) -> bytes:
+    """Read a registered document (archive copy first) and verify it against its SHA-256.
+
+    Returns the verified bytes so callers parse exactly what was checked.
+    """
+    import hashlib
+    for candidate in (doc.get("archive_uri"), doc.get("original_path")):
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != doc["sha256"]:
+            raise EvidenceIntegrityError(
+                f"{path} does not match registered SHA-256 {doc['sha256']} for "
+                f"{doc['document_id']}; refusing to process altered evidence")
+        return data
+    raise EvidenceIntegrityError(f"no readable copy of {doc['document_id']} (archive or original)")

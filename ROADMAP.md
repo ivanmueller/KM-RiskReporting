@@ -16,7 +16,8 @@ for a gate that needs real data or sign-off.
 
 - **Stage 1, Phase 1 (foundation):** done.
 - **Week 1 discovery:** in progress. The October trade zip has been received and needs to be inventoried.
-- **Engineering:** B1–B5, B7 and B8 are done (226 tests). Next: run the Codex review (B6) and triage what it finds.
+- **Engineering:** B1–B5, B7 and B8 are done. Contract **text extraction** (`.pdf`, `.xlsx`, `.msg` with attachments), `profile-documents` and layout fingerprints are built (264 tests). The Codex review (B6) is in progress.
+- **Your next step:** run `docs/contract_extraction.md` steps 1–4 on the October zip and send back the profile **summary** (counts only). It decides which counterparty layouts get a parser first.
 
 ## NOW — next actions (in order)
 
@@ -37,7 +38,7 @@ for a gate that needs real data or sign-off.
   - paste the manifest rows into `Contract_Documents` (the zip is row `INV-ZIP-0001`; refused members appear as `EXCEPTED`);
   - classify each one **from its content**, not from its filename;
   - flag scans, emails and amendments.
-- [ ] **A7. Count and size the work:** documents per format (PDF text / PDF scan / Excel / `.msg` / `.eml`) and
+- [ ] **A7. Count and size the work** (tooling ready: `riskparse profile-documents`, counts plus layout groups): documents per format (PDF text / PDF scan / Excel / `.msg` / `.eml`) and
   documents per trade. Check this against the roughly 35 trades. These counts decide which parsers get built first (Week 3).
 - [ ] **A8. Find what's missing:**
   - does the zip contain Egistix exports? All 2–3 trader sheets? Amendments? Evergreen agreements
@@ -89,7 +90,7 @@ for a gate that needs real data or sign-off.
 - [x] Exact-reference reconciliation slice
 - [x] End-to-end smoke demo on synthetic data (candidate only, never published)
 - [x] Docs: scope, SQL checklist, inventory guide, blockers, `HANDOFF.md`, review prompt
-- [x] 226 tests passing, `ruff` clean, setup verified in a clean environment
+- [x] 226 tests passing at the end of the B-fixes, `ruff` clean, setup verified in a clean environment (264 after the extraction slice)
 
 ### Week 1 (Nov 2–6) — Discovery and economic scope
 
@@ -125,9 +126,9 @@ for a gate that needs real data or sign-off.
 
 ### Week 3 (Nov 16–20) — Extract and normalize
 
-- [ ] Choose which templates to build first, from the actual document counts (A7)
-- [ ] Priority Excel / text-PDF / email extractors, with field evidence locations
-- [ ] OCR route for scans, if any are present
+- [ ] Choose which templates to build first, from the actual document counts and layout groups (A7). *Tooling ready; needs your profile summary.*
+- [~] Priority Excel / text-PDF / email extractors, with field evidence locations. *Done: layout-neutral text extraction with exact locations for `.pdf`, `.xlsx` and `.msg` (attachments registered as child documents), stored in SQL (`0003`), verified against hashes, tested on synthetic files. Left: counterparty templates that turn located text into fields.*
+- [ ] OCR route for scans, if any are present. *Scans are already detected (`NEEDS_OCR` / `PARTIAL_TEXT`); the OCR tool itself still needs approval.*
 - [ ] Normalization reference maps (counterparty, hub, unit, calendar), versioned
 - [ ] Real Egistix and trader-sheet import mappings
 - [ ] Unit tests: negative and zero values, date formats, buy/sell ambiguity

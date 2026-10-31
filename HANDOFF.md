@@ -17,8 +17,10 @@ any SQL engine with one frozen Alembic migration, SHA-256 document identity with
 archive, a hash-chained audit trail, the October 2026 source-inventory workbook with a validator and a
 read-only scanner, a safe intake command for a received ZIP, a CSV import that keeps raw rows
 unchanged and re-checks their hash, a reconciliation that matches only on exact references, and an
-end-to-end smoke demo. The migration head is `0002_sod_case_and_zip`. 226 tests pass and `ruff` is
-clean. Defects D-1 to D-6 and suspicions S-1, S-4, S-5 and S-13 are fixed (sections 5–6). **No real data,
+end-to-end smoke demo. Since then, a layout-neutral **text-extraction** slice has been added for
+`.pdf`, `.xlsx` and `.msg`, including email attachments (see `docs/contract_extraction.md`). It comes
+with a folder profiler that fingerprints layouts without revealing content. The migration head is
+`0003_document_extraction`. 264 tests pass and `ruff` is clean. Defects D-1 to D-6 and suspicions S-1, S-4, S-5 and S-13 are fixed (sections 5–6). **No real data,
 credentials, L drive or SQL server has been touched. Nothing publishes.** The SQL engine is
 still unconfirmed, so SQLite is the only backend that has actually run.
 
@@ -34,7 +36,7 @@ ruff check src tests
 riskparse demo-smoke --workdir var/demo
 ```
 
-Windows/PowerShell equivalents are in `README.md`. Expected result: `226 passed` (the
+Windows/PowerShell equivalents are in `README.md`. Expected result: `264 passed` (the
 repository-hygiene tests skip outside a git checkout), and the demo ends with `SMOKE DEMO: PASS`.
 
 ## 3. Code map and responsibilities
@@ -60,6 +62,11 @@ repository-hygiene tests skip outside a git checkout), and the demo ends with `S
 | `inventory/scan.py` | Read-only folder hashing → Contract_Documents rows + duplicate/revision findings | |
 | `demo/smoke.py` | Synthetic end-to-end flow; creates a CANDIDATE publication only | Refuses to delete a folder unless it carries the demo marker file |
 | `docs_gen.py` | Generates `docs/data_dictionary.md` | A test fails if the doc drifts from the schema |
+| `extract/xlsx.py`, `pdf.py`, `msg.py` | Raw text segments with exact locations (`Sheet!B7`, `p3:L12`, `header:Subject`, `body:L4`, `attachment:N`); statuses `TEXT_EXTRACTED` / `PARTIAL_TEXT` / `NEEDS_OCR` / `ENCRYPTED` / `UNSUPPORTED` / `FAILED` with reasons | **No interpretation.** Formulas are not evaluated; hidden sheets are flagged; `.msg` is read with `olefile` (BSD) via a hand-written MS-OXMSG reader, not the GPL `extract-msg` |
+| `extract/dispatch.py` | File type → extractor; size limits fail safely | Bump an extractor's `VERSION` whenever its output changes, so documents are re-extracted |
+| `extract/store.py` | Verify bytes against the SHA-256, extract, store `document_extractions` / `document_segments`, register email attachments as child documents; idempotent; audited | Attachment names are sanitised; files are never overwritten |
+| `extract/profile.py` | `profile-documents`: counts by folder class, format and status; `layout_key` fingerprints of field labels (not values) | Output has no content, but the CSV has file names; keep it off the repo |
+| `tests/doc_fixtures.py` | Synthetic `.msg` (minimal MS-CFB writer), text PDF and `.xlsx` builders for tests | Test-only; validated in strict mode against olefile |
 | `cli.py` | `config-check`, `db-upgrade`, `db-current`, `register-document`, `audit-verify`, `inventory-*`, `intake-zip`, `gen-data-dictionary`, `demo-smoke` | Exit 3 = configuration refused, 4 = intake refused |
 | `extract/`, `normalize/`, `publish/`, `reports/` | Placeholders only | Intentionally empty in Phase 1 |
 
@@ -155,6 +162,9 @@ Summary only; the detail is in `docs/blockers.md`:
   build it.
 
 ## 9. Recommended next steps (in order)
+
+> The Codex review started on commit `e6c588b`. The extraction slice was committed after that,
+> so it is **not** covered by that review run unless Codex is re-pointed at `HEAD`.
 
 The live task and stage tracker is [`ROADMAP.md`](ROADMAP.md); keep it updated as items close.
 

@@ -9,3 +9,4 @@ authorized = false
 
 [paths]
 archive_root = "var/archive_test"
+work_root = "var/work_test"

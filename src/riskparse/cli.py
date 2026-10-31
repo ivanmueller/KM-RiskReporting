@@ -174,6 +174,65 @@ def cmd_gen_data_dictionary(args) -> int:
     return 0
 
 
+def cmd_profile_documents(args) -> int:
+    from riskparse.extract.profile import format_summary, profile_folder, write_profile
+    result = profile_folder(args.root)
+    out = write_profile(result, args.out)
+    print(format_summary(result))
+    print("profile:", out)
+    return 0
+
+
+def cmd_extract_preview(args) -> int:
+    from riskparse.evidence.hashing import fingerprint
+    from riskparse.extract.dispatch import extract_bytes
+    fp = fingerprint(args.path)
+    data = Path(args.path).read_bytes()
+    r = extract_bytes(data, fp.file_type, filename=fp.filename)
+    print(f"{fp.filename}  type={fp.file_type}  sha256={fp.sha256}")
+    print(f"status={r.status}  extractor={r.extractor} v{r.extractor_version}  "
+          f"segments={len(r.segments)}")
+    for k, v in r.metadata.items():
+        print(f"  {k}: {v}")
+    for w in r.warnings:
+        print(f"WARNING: {w}")
+    print("-- segments (raw text, not interpreted) --")
+    for s in r.segments[: args.limit]:
+        print(f"{s.location:<24} {s.text}")
+    if len(r.segments) > args.limit:
+        print(f"... {len(r.segments) - args.limit} more (use --limit)")
+    return 0
+
+
+def cmd_extract(args) -> int:
+    from riskparse.db.connection import create_db_engine
+    from riskparse.extract.store import extract_all_pending, extract_document
+    s = _settings(args)
+    engine = create_db_engine(s)
+    actor = args.actor or getpass.getuser()
+    try:
+        with engine.begin() as conn:
+            if args.all:
+                summaries = extract_all_pending(conn, actor=actor, work_root=s.paths.work_root,
+                                                archive_root=s.paths.archive_root)
+            else:
+                summaries = [extract_document(conn, d, actor=actor, work_root=s.paths.work_root,
+                                              archive_root=s.paths.archive_root)
+                             for d in args.document_id]
+    finally:
+        engine.dispose()
+    for sm in summaries:
+        flag = " (already extracted)" if sm.already_done else ""
+        print(f"{sm.status:<15} {sm.document_id} segments={sm.segments}{flag}")
+        for w in sm.warnings:
+            print(f"    WARNING: {w}")
+        for name, doc_id, outcome in sm.attachments_registered:
+            print(f"    attachment {name!r} -> {doc_id} ({outcome})")
+    if not summaries:
+        print("nothing to extract")
+    return 0
+
+
 def cmd_demo_smoke(args) -> int:
     from riskparse.demo.smoke import run_smoke
     summary = run_smoke(args.workdir)
@@ -239,6 +298,26 @@ def build_parser() -> argparse.ArgumentParser:
                                           "2026-11-02T09:15-07:00")
     iz.set_defaults(func=cmd_intake_zip)
 
+    pf = sub.add_parser("profile-documents", help="count and size contract documents by "
+                                                  "folder/format/status (no DB)")
+    pf.add_argument("--root", required=True)
+    pf.add_argument("--out", required=True, help="CSV to create (keep it on the L drive)")
+    pf.set_defaults(func=cmd_profile_documents)
+
+    ep = sub.add_parser("extract-preview", help="show the raw text segments of one file "
+                                                "(non-publishing, no DB)")
+    ep.add_argument("path")
+    ep.add_argument("--limit", type=int, default=200)
+    ep.set_defaults(func=cmd_extract_preview)
+
+    ex = sub.add_parser("extract", help="extract text from registered documents into the DB")
+    grp = ex.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--all", action="store_true", help="every pending document, then any "
+                                                        "attachments that produced")
+    grp.add_argument("--document-id", nargs="+")
+    ex.add_argument("--actor")
+    ex.set_defaults(func=cmd_extract)
+
     gd = sub.add_parser("gen-data-dictionary", help="regenerate docs/data_dictionary.md")
     gd.add_argument("--out", default="docs/data_dictionary.md")
     gd.set_defaults(func=cmd_gen_data_dictionary)
@@ -259,6 +338,10 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(exc, ConfigError):
             print(f"configuration refused: {exc}", file=sys.stderr)
             return 3
+        from riskparse.evidence.registry import EvidenceIntegrityError
+        if isinstance(exc, EvidenceIntegrityError):
+            print(f"evidence check failed: {exc}", file=sys.stderr)
+            return 5
         if isinstance(exc, ZipIntakeError | FileExistsError):
             print(f"intake refused: {exc}", file=sys.stderr)
             return 4

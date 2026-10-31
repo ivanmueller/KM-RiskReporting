@@ -34,3 +34,5 @@ authorized = false
 # Content-addressed evidence archive used by the local demo. For real use IT must
 # provide the UNC path (e.g. \\server\share\Risk Reporting\07_SourceArchive).
 archive_root = "var/archive"
+# Working area for processing output, e.g. email attachments before registration.
+work_root = "var/work"

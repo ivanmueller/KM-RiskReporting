@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, select
 from riskparse.db import migrate
 from riskparse.db.schema import active_publication, metadata
 
-HEAD = "0002_sod_case_and_zip"
+HEAD = "0003_document_extraction"
 
 
 def test_single_head():
@@ -99,7 +99,8 @@ def test_upgrade_is_idempotent(engine):
 def test_migration_files_are_frozen():
     """Migrations must not import the live schema module."""
     files = sorted((migrate.MIGRATIONS_DIR / "versions").glob("0*.py"))
-    assert [f.name for f in files] == ["0001_initial.py", "0002_sod_case_and_zip.py"]
+    assert [f.name for f in files] == ["0001_initial.py", "0002_sod_case_and_zip.py",
+                                      "0003_document_extraction.py"]
     for f in files:
         assert "riskparse" not in f.read_text().split('"""', 2)[2], f.name
 

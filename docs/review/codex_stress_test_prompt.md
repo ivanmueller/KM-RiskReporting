@@ -4,7 +4,7 @@ Copy everything below the line into Codex (or any code-review agent) with the re
 out at branch `claude/risk-reporting-phase-1-x8u26q`. The prompt is self-contained: the reviewer
 does not need the game-plan document.
 
-*Revision 3 (2026-10-31): scoped strictly to the code and results Claude produced.*
+*Revision 4 (2026-10-31): scoped strictly to the code and results Claude produced; adds the contract text-extraction slice (claim C15, guarantee 13, section I).*
 
 ---
 
@@ -81,7 +81,7 @@ Reproduce each claim. Report each as **TRUE**, **FALSE (finding #)** or **NOT VE
 
 | # | Claim | Where Claude made it | How to check |
 | --- | --- | --- | --- |
-| C1 | A clean install from `requirements/lock.txt` works; `python -m pytest` gives **226 passed**; `ruff check src tests` is clean | `README.md` Setup; `HANDOFF.md` §1–2; `ROADMAP.md` | Fresh venv, exact README commands. Note any skips, warnings or flaky tests |
+| C1 | A clean install from `requirements/lock.txt` works; `python -m pytest` gives **264 passed** at `HEAD`; `ruff check src tests` is clean | `README.md` Setup; `HANDOFF.md` §1–2; `ROADMAP.md` | Fresh venv, exact README commands. Note any skips, warnings or flaky tests |
 | C2 | `riskparse demo-smoke` prints `SMOKE DEMO: PASS` with SYN-T001 `MATCHED`, SYN-T002 `MATCHED_BREAK`, SYN-T003 `UNRESOLVED`, SYN-T004 `NOT_BOOKED`, SYN-T005 `UNRESOLVED`, one `UNCONFIRMED` unmatched row, `CANDIDATE` status, `active_publication: null`, an intact audit chain and no archive problems | `README.md` "Verify the synthetic demo"; `docs/phase1_scope.md` walkthrough | Run it and compare field by field. Is the PASS check itself strict enough to fail when a status is wrong? |
 | C3 | D-1…D-5 are fixed, and their regression tests fail on the code before the fix (commit `694a11d`), with the per-defect counts and exceptions Claude lists | `HANDOFF.md` §5 ("How the tests fail on the old code was checked"); commit `193868a` message | Run the new tests (D-2: `tests/test_parse_strict.py`) against `694a11d`'s `src/` in a scratch worktree. Confirm the counts, that each failure is for the stated reason rather than an import or signature error, and that every test that passes on old code really is a control case |
 | C4 | D-6 is fixed: upgrading a database that holds linked rows from `0001` to `0002` works under enforced foreign keys, and FKs are re-enabled afterwards | `HANDOFF.md` §5 D-6; `ROADMAP.md` B4 | Reproduce the original failure by bypassing `run_guarded`, then confirm the fix and its tests |
@@ -91,10 +91,11 @@ Reproduce each claim. Report each as **TRUE**, **FALSE (finding #)** or **NOT VE
 | C8 | Each "control demonstrated by tests" has a test that would **fail if the control were removed** | `docs/phase1_scope.md` "Controls demonstrated by tests" | Hand-mutate a scratch copy (remove the control) and run the cited test |
 | C9 | `docs/data_dictionary.md` matches the schema; the committed inventory templates match what the generator produces | `docs/data_dictionary.md` header; `tests/test_docs.py`; `tests/test_repo_hygiene.py` | Regenerate both and diff. For the templates, compare all cells and data validations, not only headers |
 | C10 | Only portable DDL; all constraint names ≤ 58 characters; Phase 1 never connects to `prod`; no passwords in config | `docs/sql_platform_confirmation.md`; `README.md` "Ground rules" | Inspect both migrations and `schema.py`; attack the config layer (Part 2-A) |
-| C11 | `.gitignore` plus the hygiene tests stop confidential file types being committed | `.gitignore` header; `tests/test_repo_hygiene.py` | Try in a scratch clone (Part 2-I) |
+| C11 | `.gitignore` plus the hygiene tests stop confidential file types being committed | `.gitignore` header; `tests/test_repo_hygiene.py` | Try in a scratch clone (Part 2-J) |
 | C12 | Locked dependencies are all MIT/BSD/Apache/PSF licensed | `docs/blockers.md` B-08 | Check the licence metadata of every package in `requirements/lock.txt` |
 | C13 | Every command documented in `README.md`, `docs/source_inventory_guide.md` and `ROADMAP.md` runs as written and behaves as described (exit codes included: config refusal 3, intake refusal 4, `inventory-validate` 0/1/2) | Those documents | Run each with synthetic inputs (UNC paths replaced by local folders) |
 | C14 | Each commit message accurately describes its diff, with no undisclosed changes and no claims beyond what the diff contains | Every commit from `2948ee2` to `HEAD` | `git show --stat <hash>` and read each diff against its message |
+| C15 | Text extraction reads `.pdf`, `.xlsx` and `.msg` without interpreting anything; every segment carries an exact location; scans, hidden sheets, uncalculated formulas, RTF-only bodies, embedded or linked attachments are reported, never skipped; evidence is re-hashed before extraction; attachments become child documents; `layout_key` reveals no content | `docs/contract_extraction.md`; `src/riskparse/extract/*` docstrings; `HANDOFF.md` §3 | Part 2-I |
 
 ## Part 2 — Attack Claude's code
 
@@ -132,6 +133,11 @@ one is a finding against Claude's code.
     it. It never writes outside the extraction directory or overwrites a file, never follows links,
     never extracts encrypted members, stops zip bombs, and lists every refused member as
     `EXCEPTED` with its reason.
+
+13. **Extraction is evidence-preserving and interprets nothing.** Every extracted text segment
+    is the raw text with an exact location. Nothing becomes a price, volume, side or date.
+    Partial reads are reported. Only bytes matching the registered SHA-256 are processed, and the
+    profile output holds no document content.
 
 ### A. Configuration and connection (`config.py`, `db/connection.py`, `cli.py`)
 - Wrong TOML types for every field: strings for booleans (`"false"`, `"0"`, `"no"`), integers for
@@ -262,7 +268,40 @@ Build hostile archives with `zipfile` or by patching bytes:
   to each other or to already-registered documents? Is a naive `--received-at` refused cleanly or
   with a traceback?
 
-### I. Claude's tests, demo and repository hygiene
+### I. Contract text extraction (`extract/*`, `profile-documents`, `extract`, `extract-preview`)
+Build hostile or unusual synthetic files (see `tests/doc_fixtures.py` for `.msg`/PDF/`.xlsx`
+builders):
+- **PDF:** text in a different order than displayed; ligatures and hyphenation; rotated pages;
+  multi-column layouts producing wrong line order (is the location still truthful?);
+  incremental updates hiding earlier text; huge or compressed streams; a page under the
+  20-character threshold that really is text (false `NEEDS_OCR`); scanned pages with an OCR text
+  layer already embedded.
+- **Excel:**
+  - merged cells (do values appear once, at the right coordinate?);
+  - shared or array formulas;
+  - dates stored as numbers with a date format;
+  - 1900-vs-1904 date systems;
+  - `veryHidden` sheets; very large sheets (limits);
+  - an `.xlsm` with macros (never run);
+  - a cached value that disagrees with its formula.
+- **.msg:**
+  - ANSI strings with a missing or wrong codepage;
+  - a sender with only an Exchange (X.500) address;
+  - an HTML body containing script, hidden text or comments;
+  - attachments with no filename, duplicate filenames or path tricks in the name;
+  - nested embedded emails; a truncated or corrupt property stream;
+  - a `.msg` that is really an `.eml`.
+  Check the `__properties_version1.0` header sizes Claude assumed (32 bytes root, 8 bytes
+  attachment) against MS-OXMSG.
+- **Store and profile:**
+  - is anything parsed from unverified bytes?
+  - is re-extraction triggered when an extractor version changes, and only then?
+  - can the same attachment registered from two emails be lost, or its parent link be wrong?
+  - can `layout_key` leak content, or group different layouts together (or split one layout)
+    enough to mislead parser prioritisation?
+  - can `profile-documents` or `extract` write anything inside the scanned folder?
+
+### J. Claude's tests, demo and repository hygiene
 - Tests that **pass for the wrong reason**:
   - always-true assertions;
   - `pytest.raises` catching a broader error than the rule under test;
@@ -285,7 +324,7 @@ Build hostile archives with `zipfile` or by patching bytes:
 ## Required output
 
 1. **Baseline**: the test and lint results you observed (C1).
-2. **Claims table (Part 1)**: C1–C14, each TRUE / FALSE (finding #) / NOT VERIFIABLE (why), with the
+2. **Claims table (Part 1)**: C1–C15, each TRUE / FALSE (finding #) / NOT VERIFIABLE (why), with the
    command you ran.
 3. **Findings table**, most severe first:
 
@@ -297,7 +336,7 @@ Build hostile archives with `zipfile` or by patching bytes:
 4. **Reproduction code**: each `tests/review/test_review_*.py` or `review_scratch/*` file, with the
    command to run it and its failing output.
 5. **Unconfirmed suspicions**, each with why it could not be reproduced.
-6. **Guarantee map**: guarantees 1–12, each *held*, *violated (finding #)* or *untested*.
+6. **Guarantee map**: guarantees 1–13, each *held*, *violated (finding #)* or *untested*.
 7. **Top 5 fixes**, ordered by risk reduction per hour of work.
 8. **Noted, out of scope**: one line per item, if any.
 

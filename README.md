@@ -40,14 +40,17 @@ src/riskparse/
   db/connection.py          guarded engine creation (sqlite | mssql* | postgresql*)  *unverified
   db/schema.py              portable schema (16 tables)
   db/migrate.py             programmatic Alembic helpers
-  db/migrations/            frozen Alembic migrations (0001_initial, 0002_sod_case_and_zip)
+  db/migrations/            frozen Alembic migrations (0001_initial, 0002_sod_case_and_zip,
+                            0003_document_extraction)
   identity.py               person-identity normalization for separation-of-duties checks
   docs_gen.py               generates docs/data_dictionary.md
   evidence/                 hashing, content-addressed archive, document registry, safe ZIP intake
   inventory/                inventory template definition, xlsx/csv writer, validator, scanner
   reconcile/exact.py        exact-alias reconciliation slice (synthetic demo)
   demo/smoke.py             synthetic end-to-end smoke demo
-  extract/ normalize/ publish/ reports/   placeholders - intentionally not implemented
+  extract/                  text extraction with evidence locations (.pdf, .xlsx, .msg),
+                            folder profiler with layout fingerprints, SQL storage
+  normalize/ publish/ reports/   placeholders - intentionally not implemented
 inventory/templates/        blank October 2026 source-inventory template (xlsx + csv)
 docs/                       scope, data dictionary, SQL checklist, inventory guide, blockers
 tests/                      unit, migration, constraint, inventory, hygiene and smoke tests
@@ -121,6 +124,19 @@ inventory manifest. Add `--register` to also record the ZIP and every member in 
 database (only with an approved configuration; the local SQLite file is a provisional prototype).
 
 See [`docs/source_inventory_guide.md`](docs/source_inventory_guide.md).
+
+## Contract intake, profiling and text extraction
+
+See [`docs/contract_extraction.md`](docs/contract_extraction.md) for the full Windows runbook.
+
+```bash
+riskparse profile-documents --root "<contracts folder>" --out "<outside the repo>/profile.csv"
+riskparse extract --all
+riskparse extract-preview "<one file>"
+```
+
+Extraction stores raw text with locations only. It does not turn any text into a price,
+volume or date.
 
 ## Other commands
 

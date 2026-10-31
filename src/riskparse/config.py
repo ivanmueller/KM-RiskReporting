@@ -68,6 +68,9 @@ class DatabaseConfig:
 @dataclass(frozen=True)
 class PathsConfig:
     archive_root: str = "var/archive"
+    # Working area for files produced during processing (e.g. email attachments written
+    # out before registration). Keep on the controlled machine / L drive.
+    work_root: str = "var/work"
 
 
 @dataclass(frozen=True)
@@ -127,7 +130,8 @@ _DB_TYPES: dict[str, tuple[type, bool]] = {   # key -> (type, may be omitted/Non
     "authorized": (bool, False),
 }
 _ENV_TYPES: dict[str, tuple[type, bool]] = {"name": (str, False)}
-_PATHS_TYPES: dict[str, tuple[type, bool]] = {"archive_root": (str, False)}
+_PATHS_TYPES: dict[str, tuple[type, bool]] = {"archive_root": (str, False),
+                                               "work_root": (str, False)}
 # Characters that would let a value smuggle extra connection-string attributes
 # or credentials (``user:pw@host``, ``DRIVER=x;PWD=y``).
 _INJECTION_CHARS = ("@", ";", "=", "://", "{", "}")

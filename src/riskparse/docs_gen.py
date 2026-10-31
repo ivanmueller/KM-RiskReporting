@@ -45,6 +45,12 @@ PURPOSE = {
     "confirmation.",
     "active_publication": "Single-row active-publication pointer with `pointer_version` for "
     "optimistic expected-current checks. Seeded empty. No code in Phase 1 changes it.",
+    "document_extractions": "One text-extraction run per document and extractor version: "
+    "status (TEXT_EXTRACTED / PARTIAL_TEXT / NEEDS_OCR / ENCRYPTED / UNSUPPORTED / FAILED), "
+    "segment count, a hash of the extracted text, metadata and warnings. Bytes are verified "
+    "against the registered SHA-256 first. Idempotent per (document, extractor, version).",
+    "document_segments": "Raw text pieces from one extraction with exact evidence locations "
+    "(`Sheet!B7`, `p3:L12`, `header:Subject`, `body:L4`, `attachment:2`). Not interpreted.",
     "audit_events": "Append-only, hash-chained audit trail (actor, approver, action, "
     "before/after, reason). Actors are normalized identities. `riskparse audit-verify` "
     "detects edits and deletions.",

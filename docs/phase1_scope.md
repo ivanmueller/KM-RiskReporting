@@ -46,7 +46,10 @@ regression tests. Migration `0002_sod_case_and_zip` was added, along with safe Z
 
 ## Deliberately NOT built (per instruction and game plan)
 
-- PDF / Excel-confirmation / `.eml` / `.msg` parsing and OCR (`riskparse.extract` is a placeholder).
+- Economic parsing of PDF / Excel / `.msg` confirmations (turning text into prices, volumes,
+  dates or sides), `.eml` support and OCR. *Update:* layout-neutral **text** extraction with
+  evidence locations for `.pdf`, `.xlsx` and `.msg` was added after Phase 1; see
+  `docs/contract_extraction.md`. It interprets nothing.
 - Normalization reference maps, unit conversion, composite/fuzzy matching, amendment chains.
 - Approval workflow, publication activation, diff, rollback, recovery drill.
 - Excel report generation and manifests.
