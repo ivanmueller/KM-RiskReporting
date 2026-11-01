@@ -4,7 +4,7 @@ Copy everything below the line into Codex (or any code-review agent) with the re
 out at branch `claude/risk-reporting-phase-1-x8u26q`. The prompt is self-contained: the reviewer
 does not need the game-plan document.
 
-*Revision 4 (2026-10-31): scoped strictly to the code and results Claude produced; adds the contract text-extraction slice (claim C15, guarantee 13, section I).*
+*Revision 5 (2026-11-01): scoped strictly to the code and results Claude produced; covers the contract text-extraction slice (C15, guarantee 13, section I) and the fixes for Codex review 1 (C16).*
 
 ---
 
@@ -81,7 +81,7 @@ Reproduce each claim. Report each as **TRUE**, **FALSE (finding #)** or **NOT VE
 
 | # | Claim | Where Claude made it | How to check |
 | --- | --- | --- | --- |
-| C1 | A clean install from `requirements/lock.txt` works; `python -m pytest` gives **264 passed** at `HEAD`; `ruff check src tests` is clean | `README.md` Setup; `HANDOFF.md` §1–2; `ROADMAP.md` | Fresh venv, exact README commands. Note any skips, warnings or flaky tests |
+| C1 | A clean install from `requirements/lock.txt` works; `python -m pytest` gives **334 passed, 1 skipped** at `HEAD`; `ruff check src tests` is clean | `README.md` Setup; `HANDOFF.md` §1–2; `ROADMAP.md` | Fresh venv, exact README commands. Note any skips, warnings or flaky tests |
 | C2 | `riskparse demo-smoke` prints `SMOKE DEMO: PASS` with SYN-T001 `MATCHED`, SYN-T002 `MATCHED_BREAK`, SYN-T003 `UNRESOLVED`, SYN-T004 `NOT_BOOKED`, SYN-T005 `UNRESOLVED`, one `UNCONFIRMED` unmatched row, `CANDIDATE` status, `active_publication: null`, an intact audit chain and no archive problems | `README.md` "Verify the synthetic demo"; `docs/phase1_scope.md` walkthrough | Run it and compare field by field. Is the PASS check itself strict enough to fail when a status is wrong? |
 | C3 | D-1…D-5 are fixed, and their regression tests fail on the code before the fix (commit `694a11d`), with the per-defect counts and exceptions Claude lists | `HANDOFF.md` §5 ("How the tests fail on the old code was checked"); commit `193868a` message | Run the new tests (D-2: `tests/test_parse_strict.py`) against `694a11d`'s `src/` in a scratch worktree. Confirm the counts, that each failure is for the stated reason rather than an import or signature error, and that every test that passes on old code really is a control case |
 | C4 | D-6 is fixed: upgrading a database that holds linked rows from `0001` to `0002` works under enforced foreign keys, and FKs are re-enabled afterwards | `HANDOFF.md` §5 D-6; `ROADMAP.md` B4 | Reproduce the original failure by bypassing `run_guarded`, then confirm the fix and its tests |
@@ -96,6 +96,7 @@ Reproduce each claim. Report each as **TRUE**, **FALSE (finding #)** or **NOT VE
 | C13 | Every command documented in `README.md`, `docs/source_inventory_guide.md` and `ROADMAP.md` runs as written and behaves as described (exit codes included: config refusal 3, intake refusal 4, `inventory-validate` 0/1/2) | Those documents | Run each with synthetic inputs (UNC paths replaced by local folders) |
 | C14 | Each commit message accurately describes its diff, with no undisclosed changes and no claims beyond what the diff contains | Every commit from `2948ee2` to `HEAD` | `git show --stat <hash>` and read each diff against its message |
 | C15 | Text extraction reads `.pdf`, `.xlsx` and `.msg` without interpreting anything; every segment carries an exact location; scans, hidden sheets, uncalculated formulas, RTF-only bodies, embedded or linked attachments are reported, never skipped; evidence is re-hashed before extraction; attachments become child documents; `layout_key` reveals no content | `docs/contract_extraction.md`; `src/riskparse/extract/*` docstrings; `HANDOFF.md` §3 | Part 2-I |
+| C16 | Every finding from Codex review 1 is fixed, corrected or guarded as stated; its regression test fails on the pre-fix code (`296be75`) except the listed controls | `HANDOFF.md` §10; `tests/test_review_codex1.py`; `tests/test_reconcile.py` | Re-run each review-1 probe against `HEAD`; run the new tests against `296be75`'s `src/` and check the 65-fail / 10-control split |
 
 ## Part 2 — Attack Claude's code
 
@@ -123,8 +124,10 @@ one is a finding against Claude's code.
    the approver (case-, whitespace- and Unicode-insensitive). Evergreen approval needs two different
    people; whoever keys a crosswalk row can't also verify it.
 8. **Publication.** Exactly one active-publication pointer row exists, Claude's code never changes it,
-   and the demo candidate stays `CANDIDATE`.
-9. **Audit trail** is append-only and hash-chained; edits, deletions and reordering are detected.
+   `audit-verify` fails if the row is missing or duplicated, and the demo candidate stays `CANDIDATE`.
+9. **Audit trail** is append-only and hash-chained. Edits, deletions and reordering inside the chain
+   are detected; deleting the newest events is detected against an external anchor
+   (`audit-verify --expect-count/--expect-head`).
 10. **Timestamps** are timezone-aware UTC; naive datetimes are rejected.
 11. **Migrations** `0001_initial` and `0002_sod_case_and_zip` are frozen literal DDL, match
     `schema.py` exactly (including CHECK text), and upgrade/downgrade a database **that already
@@ -324,7 +327,7 @@ builders):
 ## Required output
 
 1. **Baseline**: the test and lint results you observed (C1).
-2. **Claims table (Part 1)**: C1–C15, each TRUE / FALSE (finding #) / NOT VERIFIABLE (why), with the
+2. **Claims table (Part 1)**: C1–C16, each TRUE / FALSE (finding #) / NOT VERIFIABLE (why), with the
    command you ran.
 3. **Findings table**, most severe first:
 

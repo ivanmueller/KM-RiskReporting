@@ -81,7 +81,8 @@ def test_profile_output_has_no_document_content_and_never_overwrites(tmp_path):
     text = out.read_text(encoding="utf-8")
     assert "SYNTHETIC physical confirm text" not in text      # no body / cell / line text
     assert "SYNTHETIC confirmation" not in text               # no email subject
-    with pytest.raises(FileExistsError):
+    from riskparse.fswalk import UnsafeOutputError
+    with pytest.raises(UnsafeOutputError, match="already exists"):
         write_profile(profile_folder(base), out)
     with out.open(newline="", encoding="utf-8") as fh:
         assert len(list(csv.DictReader(fh))) == 5
@@ -111,7 +112,12 @@ def test_extract_all_stores_segments_and_registers_attachments(conn, tmp_path):
         source_documents.c.document_id == att_id)).mappings().one()
     assert att_doc["parent_document_id"] == ids["SYN_evergreen_email.msg"]
     assert att_doc["source_channel"] == "MSG_ATTACHMENT"
-    assert att_doc["original_path"].endswith("SYN_evergreen_email.msg!/SYN_evergreen_agreement.pdf")
+    assert att_doc["original_path"].endswith("SYN_evergreen_agreement.pdf")   # real file
+    from riskparse.db.schema import document_observations
+    obs = conn.execute(select(document_observations).where(
+        document_observations.c.document_id == att_id)).mappings().one()
+    assert obs["observed_path"].endswith("SYN_evergreen_email.msg!/SYN_evergreen_agreement.pdf")
+    assert obs["container_document_id"] == ids["SYN_evergreen_email.msg"]
     assert by_doc[ids["SYN_scanned.pdf"]].status == "NEEDS_OCR"
     seg = conn.execute(select(document_segments.c.location, document_segments.c.text)
                        .join(document_extractions)

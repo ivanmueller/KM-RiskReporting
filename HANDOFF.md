@@ -19,8 +19,9 @@ read-only scanner, a safe intake command for a received ZIP, a CSV import that k
 unchanged and re-checks their hash, a reconciliation that matches only on exact references, and an
 end-to-end smoke demo. Since then, a layout-neutral **text-extraction** slice has been added for
 `.pdf`, `.xlsx` and `.msg`, including email attachments (see `docs/contract_extraction.md`). It comes
-with a folder profiler that fingerprints layouts without revealing content. The migration head is
-`0003_document_extraction`. 264 tests pass and `ruff` is clean. Defects D-1 to D-6 and suspicions S-1, S-4, S-5 and S-13 are fixed (sections 5–6). **No real data,
+with a folder profiler that fingerprints layouts without revealing content. The first Codex review
+(run on commit `070c321`) reported 26 findings; all are fixed or corrected with regression tests
+(section 10). The migration head is `0004_review_fixes`. 334 tests pass and `ruff` is clean. **No real data,
 credentials, L drive or SQL server has been touched. Nothing publishes.** The SQL engine is
 still unconfirmed, so SQLite is the only backend that has actually run.
 
@@ -36,7 +37,7 @@ ruff check src tests
 riskparse demo-smoke --workdir var/demo
 ```
 
-Windows/PowerShell equivalents are in `README.md`. Expected result: `264 passed` (the
+Windows/PowerShell equivalents are in `README.md`. Expected result: `334 passed` (the
 repository-hygiene tests skip outside a git checkout), and the demo ends with `SMOKE DEMO: PASS`.
 
 ## 3. Code map and responsibilities
@@ -61,6 +62,8 @@ repository-hygiene tests skip outside a git checkout), and the demo ends with `S
 | `inventory/workbook.py` | Writes the xlsx/CSV templates; validator with ERROR / MISSING / WARNING levels; understands real Excel date cells | D-3 fixed |
 | `inventory/scan.py` | Read-only folder hashing → Contract_Documents rows + duplicate/revision findings | |
 | `demo/smoke.py` | Synthetic end-to-end flow; creates a CANDIDATE publication only | Refuses to delete a folder unless it carries the demo marker file |
+| `numeric.py` | `ExactNumeric` column type and `storage_problem`: money and quantity values are stored exactly or refused | SQLite stores NUMERIC as float; the guard stops silent changes |
+| `fswalk.py` | `walk_files` (reports unreadable folders and links), `check_output_location` (outputs never inside the read tree, never overwrite) | Used by scan, profile and ZIP intake |
 | `docs_gen.py` | Generates `docs/data_dictionary.md` | A test fails if the doc drifts from the schema |
 | `extract/xlsx.py`, `pdf.py`, `msg.py` | Raw text segments with exact locations (`Sheet!B7`, `p3:L12`, `header:Subject`, `body:L4`, `attachment:N`); statuses `TEXT_EXTRACTED` / `PARTIAL_TEXT` / `NEEDS_OCR` / `ENCRYPTED` / `UNSUPPORTED` / `FAILED` with reasons | **No interpretation.** Formulas are not evaluated; hidden sheets are flagged; `.msg` is read with `olefile` (BSD) via a hand-written MS-OXMSG reader, not the GPL `extract-msg` |
 | `extract/dispatch.py` | File type → extractor; size limits fail safely | Bump an extractor's `VERSION` whenever its output changes, so documents are re-extracted |
@@ -77,9 +80,12 @@ repository-hygiene tests skip outside a git checkout), and the demo ends with `S
 3. Archived bytes are never overwritten. A new version means a new document row with `revision_of_document_id`.
 4. A genuine `0` is `PRESENT` with value 0. `MISSING`, `PENDING`, `NOT_APPLICABLE` and `UNRESOLVED` must have a NULL value (enforced by a database CHECK).
 5. A missing Egistix entry never makes a trade invalid. Only Risk may classify a trade as `EGISTIX_NOT_APPLICABLE`.
-6. The person who creates a publication cannot approve it, and an audit actor cannot be the approver.
-7. Exactly one `active_publication` row exists. Phase 1 code never changes it.
-8. All timestamps are timezone-aware UTC; `UTCDateTime` rejects naive values.
+6. The person who creates a publication cannot approve it, and an audit actor cannot be the approver. Identities are normalized (NFKC, whitespace, case); the database also rejects case variants and surrounding spaces.
+7. Exactly one `active_publication` row exists. Phase 1 code never changes it. Portable SQL cannot stop someone deleting the row directly, so `riskparse audit-verify` fails unless exactly one row is present (Codex #26).
+8. All timestamps are timezone-aware UTC; `UTCDateTime`, `audit.record`, registration and reconciliation reject naive values.
+11. Money and quantity columns refuse any value they would store differently (`riskparse.numeric.ExactNumeric`); an import reports such a value as unparsed instead.
+12. The audit chain detects edits, reordering and deletions inside the chain. Deleting the **newest** events is only detectable against an anchor recorded outside the database (`audit-verify` prints it; pass it back with `--expect-count/--expect-head`).
+13. Scanners and reports never write inside the folder they read and never overwrite a file.
 9. Migrations are frozen literal DDL, and `compare_metadata` against `schema.py` must show no differences (tested).
 10. No code connects to `prod`, and no config file holds a password.
 
@@ -117,14 +123,14 @@ Kept here as the record; the reviewer should try to break the fixes.
 | --- | --- | --- | --- |
 | S-1 | **FIXED** (`tests/test_reconcile.py`) | `reconcile/exact.py` `_compare` | A source field that is NULL is skipped. A source row that carries **no** comparable fields (only a reference) therefore yields `MATCHED` without any economic comparison. It should need a minimum set of compared fields, or report "not compared". |
 | S-2 | Open | `reconcile/exact.py` | Every trade is reconciled no matter which month it belongs to; only the imports are filtered by `reporting_month`. Trades from other months would show up as false `NOT_BOOKED`/`UNCONFIRMED`. Evergreen trades from earlier years must still be included, so the scope rule needs care. |
-| S-3 | Open | `reconcile/exact.py` | The run writes `linked_trade_uid` back into `source_records`. That staging data then depends on reconciliation, and a link stays even if the reference is later removed. |
+| S-3 | **FIXED** (Codex #7): runs no longer write or reuse `linked_trade_uid` | `reconcile/exact.py` | The run writes `linked_trade_uid` back into `source_records`. That staging data then depends on reconciliation, and a link stays even if the reference is later removed. |
 | S-4 | **FIXED** (`tests/test_imports.py`) | `imports.py` | Reads `archive_uri` (or `original_path`) **without re-checking the SHA-256** before parsing, so an import may not match the registered evidence. |
-| S-5 | **FIXED**, except that a failed import still cannot be retried with the same parser version (by design: bump the parser version) | `imports.py` | Accepts only UTF-8 (a cp1252 export raises `UnicodeDecodeError`); duplicate CSV headers are silently merged by `DictReader`; a repeated `source_record_id` raises `IntegrityError` and aborts the whole transaction; a failed import cannot be retried with the same parser version (unique constraint). |
-| S-6 | Open | `evidence/registry.py` | On `DUPLICATE`, the `category`, `sender` and `archive_root` passed in are ignored. A document first registered without an archive is never archived later. |
+| S-5 | **FIXED**. *Correction (Codex #18):* a failed import **can** be retried with the same parser version, because the failed attempt rolls back completely; the earlier note here was wrong | `imports.py` | Accepts only UTF-8 (a cp1252 export raises `UnicodeDecodeError`); duplicate CSV headers are silently merged by `DictReader`; a repeated `source_record_id` raises `IntegrityError` and aborts the whole transaction; a failed import cannot be retried with the same parser version (unique constraint). |
+| S-6 | **FIXED** (Codex #19): a later archive request or category is applied to a duplicate | `evidence/registry.py` | On `DUPLICATE`, the `category`, `sender` and `archive_root` passed in are ignored. A document first registered without an archive is never archived later. |
 | S-7 | Open | `evidence/registry.py` | The archive copy happens before the database insert. If the insert fails, an orphaned archive object is left behind (harmless because it is content-addressed, but untracked). |
 | S-8 | Open | `audit.py` | Reading the previous hash and then inserting is not serialized. Two concurrent writers would fork the chain (it would be *detected*, but not prevented). Engine-specific locking is deferred. |
 | S-9 | Open | `evidence/hashing.py` | The stability check relies on `st_mtime_ns`; SMB/UNC shares may report coarse timestamps. A single check cannot prove a copy has finished. |
-| S-10 | Open | `inventory/scan.py` | A `PermissionError` raised by `rglob` while walking a directory (as opposed to reading a file) may crash the scan instead of becoming an `UNREADABLE` finding. |
+| S-10 | **FIXED** (Codex): unreadable folders and links are reported by `inventory-scan` and `profile-documents` | `inventory/scan.py` | A `PermissionError` raised by `rglob` while walking a directory (as opposed to reading a file) may crash the scan instead of becoming an `UNREADABLE` finding. |
 | S-11 | Open | `db/connection.py` | The `schema_translate_map` path (`database.schema`) and where Alembic puts `alembic_version` under it have never been exercised. |
 | S-12 | Open | `UTCDateTime` / Numeric | On SQL Server, `sa.DateTime` maps to legacy `DATETIME` (3.33 ms rounding), and SQLite stores NUMERIC as float. Exact decimals and timestamps must be re-tested on the confirmed engine. |
 | S-13 | **FIXED**: `riskparse gen-data-dictionary` + `tests/test_docs.py` | `docs/data_dictionary.md` | Says it is generated from `schema.py`, but the generator script was a one-off and **is not in the repo**. Update it by hand or add a `riskparse` doc-generation command. |
@@ -163,17 +169,72 @@ Summary only; the detail is in `docs/blockers.md`:
 
 ## 9. Recommended next steps (in order)
 
-> The Codex review started on commit `e6c588b`. The extraction slice was committed after that,
-> so it is **not** covered by that review run unless Codex is re-pointed at `HEAD`.
+> The first Codex review ran on commit `070c321` with prompt revision 2, so it did **not** cover
+> the extraction slice (`296be75`) or prompt revisions 3–4. A second review at `HEAD` with the
+> current prompt is recommended.
 
 The live task and stage tracker is [`ROADMAP.md`](ROADMAP.md); keep it updated as items close.
 
 1. ~~Fix D-1 to D-6~~ — done, with regression tests.
-2. Run the independent stress-test review in `docs/review/codex_stress_test_prompt.md` and
-   triage its findings into this file.
+2. ~~Run the first Codex review and triage it~~ — done (section 10). Run a **second** review at
+   `HEAD` with the current prompt; it covers the extraction slice and these fixes.
 3. When IT answers `docs/sql_platform_confirmation.md`: run `db-upgrade` on DEV/TEST, add tests
    specific to that engine (`DATETIME2`, exact decimals, CHECK rendering, collation), then write a reviewed
    engine-specific migration for roles/DENY/locks.
 4. When the signed inventory and real exports arrive: write the real import mappings and the
    golden October records. Then move to Week 3 extraction, prioritised by actual document
    counts.
+
+## 10. Codex review 1 — findings register
+
+Reviewed commit: `070c321` (prompt revision 2). The pasted report contained the probe results and
+sections 5–8, but not the findings table itself. So Codex finding numbers below are taken from its
+guarantee map and top-5 list, or **inferred** (marked †) from the probe names, which are
+authoritative. Every item was reproduced against the code before it was fixed. Regression tests
+live in `tests/test_review_codex1.py` and `tests/test_reconcile.py`.
+
+**Checked against the pre-fix code (`296be75`):** 65 of the new tests fail there. The 10 that pass
+are controls:
+- inputs that must keep working (a legitimate named SQL instance, units that differ only in case);
+- refusals the old code already made (a config path that is a directory, a truncated non-ZIP);
+- the documentation-only retry test (#18);
+- the five pre-existing S-1 reconciliation tests.
+
+| Codex | Probe | Finding | Status | Fix |
+| --- | --- | --- | --- | --- |
+| #1 | numeric_false_match | Prices beyond float precision stored changed on SQLite, so two different prices `MATCHED` | **FIXED** | `ExactNumeric` refuses any value storage would change (scale > 10, > 18 integer digits, SQLite float loss); imports report it as unparsed with the reason |
+| #2 | — | Units never compared: 1000 MWh matched 1000 GJ | **FIXED** | Units compared as written (trimmed, case-insensitive); different unit is a break; missing unit means not compared (`UNRESOLVED`); mappings may declare a source's fixed units |
+| #3 | — | Invalid identity (invisible character) passed the inventory two-person checks | **FIXED** | Every person column must normalize to a valid identity, else ERROR |
+| #4 | — | `'pat '` could approve `'pat'` in `publication_runs` | **FIXED** | Migration `0004` adds `LTRIM/RTRIM` CHECKs on `publication_runs` and `audit_events` |
+| #5 | settings_bypass | `Settings` built in code skipped validation (`authorized="false"`, prod SQLite connected) | **FIXED** | `build_url`/`create_db_engine` re-validate types and rules; NFKC and control-character checks |
+| #6 | — | Evidence after the cutoff counted | **FIXED** | Imports with a source cutoff after the run cutoff, confirmations received after it, and terms valid from after it are excluded (noted on the item) |
+| #7 | alias_reassigned | Stale `linked_trade_uid` kept matching an old trade (S-3) | **FIXED** | Matching uses current aliases only; links are never written back |
+| #8–#10† | scanner_overwrites, unreadable_directory | `inventory-scan --out` could overwrite evidence inside the scanned tree; unreadable folders skipped silently | **FIXED** | `fswalk.check_output_location` (outside the tree, never overwrite) for scan, profile and the intake manifest; `walk_files` reports unreadable folders and links |
+| #11 | zip_symlink_race | A folder swapped for a symlink mid-extraction redirected a write outside the root | **FIXED (POSIX)**; narrowed on Windows | Directories and files created relative to an opened parent with `O_NOFOLLOW`; destination symlink refused; ZIP re-hashed after extraction. Windows has no `dir_fd`, so containment is checked before and after each write |
+| #12 | csv_syntax | Unterminated quote accepted and imported | **FIXED** | `csv` strict mode; error names the line |
+| #13 | — | Sub-second timestamp edits not detected | **FIXED** | Hash includes any sub-second part; existing whole-second chains still verify |
+| #14 | — | Deleting the newest audit events undetectable | **FIXED with an external anchor** | `chain_head`; `audit-verify` prints the anchor and checks `--expect-count/--expect-head`. Without an anchor it remains undetectable (invariant 12) |
+| #15 | unparsed_retry | Idempotent retry returned an empty exception report | **FIXED** | `source_imports.unparsed_json` (migration `0004`) is returned on retry |
+| #16 | formula_disappears | Inventory rows made of formulas read as empty and vanished | **FIXED** | Validator reports every formula cell as an ERROR |
+| #17 | git probes | `contract.PDF`, `x.pdf.txt` and `inventory/templates/completed.csv` could be committed | **FIXED** | Case-insensitive and double-extension `.gitignore` patterns; exact template whitelist; hygiene test checks every suffix and that templates equal generator output (all cells and validations) |
+| #18† | failed_retry_claim | HANDOFF S-5 said a failed import cannot be retried; it can | **DOCS CORRECTED** | S-5 row; test proves the retry is not blocked |
+| #19 | — | A later archive request on a duplicate was dropped; lost originals were invisible | **FIXED** | Late archiving; `original_path` now stores the real file; `audit-verify` re-hashes the original when there is no archive copy |
+| #20 | — | `audit.record` accepted a naive `occurred_at` | **FIXED** | Rejected; same for `received_at` and the reconciliation cutoff |
+| #21† | invalid_toml | Invalid TOML crashed with a traceback | **FIXED** | Empty, unreadable, non-UTF-8 or invalid TOML is `ConfigError` (exit 3) |
+| #22† | invalid_inventory_time | Validator accepted impossible dates, times and timezones | **FIXED** | `timestamp_problem` checks the calendar date, time, offset range, an allowed abbreviation list and IANA names |
+| #23 | naive_zip_cli | Naive `--received-at` failed only after extraction and the manifest write | **FIXED** | All intake arguments and the config are validated before anything is written |
+| #24 | zip_header_error | Bad CRC crashed with a traceback and left a partial file | **FIXED** | Corrupt member removed, recorded as `CORRUPT_MEMBER` and `EXCEPTED` in the manifest; a corrupt archive is a clean refusal (exit 4) |
+| #25 | smoke_false_pass | `demo-smoke` printed PASS with wrong statuses | **FIXED** | `smoke.check_summary` compares every documented result |
+| #26 | empty_pointer | The pointer row could be deleted, contradicting invariant 7 | **WORDING + CHECK** | Invariant 7 reworded; `audit-verify` fails unless exactly one row exists |
+| — | repeated-member provenance (guarantee 12) | A file seen in two archives kept only its first parent | **FIXED** | `document_observations.container_document_id` (migration `0004`), one row per sighting |
+| — | canceled_trade (logged by Codex as an observation, not a defect) | A `CANCELLED` trade still in Egistix was `MATCHED` | **FIXED (conservative)** | `CANCELLED`/`TERMINATED` trades are `CANCELLED_OR_AMENDED`, HIGH severity if still booked |
+| — | multi-leg (Codex: unconfirmed) | Legs after leg 1 ignored silently | **GUARDED** | A multi-leg trade is `UNRESOLVED` until multi-leg rules exist |
+
+**Still open after this review:**
+- S-2: trade population is not scoped by month.
+- S-7: an orphaned archive object is left if a database insert fails.
+- S-8: audit writers are not serialized.
+- S-9: SMB timestamp granularity limits the stable-file check.
+- S-11: the `schema_translate_map` path has never been exercised.
+- S-12: real-engine types still need testing.
+- Real-engine behaviour as a whole is untested (no server is available).

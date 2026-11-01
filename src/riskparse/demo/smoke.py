@@ -95,6 +95,7 @@ TRADER_MAPPING = SourceMapping(
     columns={"trade_ref": "Ref", "trade_date": "Date", "counterparty_raw": "Cpty",
              "side": "Side", "volume_value": "Qty", "price_value": "Px"},
     parser_version="synthetic-trader-csv-v0",
+    fixed_units={"volume_unit": "GJ", "price_unit": "CAD/GJ"},   # declared by the mapping
 )
 
 
@@ -126,11 +127,11 @@ def _write_fixtures(src: Path) -> dict[str, Path]:
         w = csv.writer(fh, lineterminator="\n")
         w.writerow(["DealID", "TradeDate", "Counterparty", "BuySell", "Volume", "VolUnit",
                     "Price", "PriceUnit", "Start", "End"])
-        w.writerow(["EGX-9001", "2026-10-05", "SYNTHETIC-CPTY-ALPHA", "BUY", "1000", "GJ/d",
+        w.writerow(["EGX-9001", "2026-10-05", "SYNTHETIC-CPTY-ALPHA", "BUY", "1000", "GJ",
                     "2.5000", "CAD/GJ", "2026-11-01", "2026-11-30"])
-        w.writerow(["EGX-9002", "2026-10-09", "SYNTHETIC-CPTY-BRAVO", "SELL", "500", "GJ/d",
+        w.writerow(["EGX-9002", "2026-10-09", "SYNTHETIC-CPTY-BRAVO", "SELL", "500", "GJ",
                     "2.6000", "CAD/GJ", "2026-11-01", "2026-11-30"])
-        w.writerow(["EGX-9005", "2024-03-01", "SYNTHETIC-CPTY-ECHO", "BUY", "2000", "GJ/d",
+        w.writerow(["EGX-9005", "2024-03-01", "SYNTHETIC-CPTY-ECHO", "BUY", "2000", "GJ",
                     "0", "CAD/GJ", "2024-04-01", ""])
     files["egistix"] = egx
 
@@ -326,3 +327,48 @@ def run_smoke(workdir: str | Path) -> dict:
         "audit_events": chain.events_checked,
         "archive_problems": archive_problems,
     }
+
+
+# What the synthetic demo must produce. README and docs/phase1_scope.md document these;
+# `riskparse demo-smoke` fails unless every one holds (Codex review: smoke_false_pass).
+EXPECTED_STATUSES = {
+    "SYN-T001": "MATCHED",
+    "SYN-T002": "MATCHED_BREAK",
+    "SYN-T003": "UNRESOLVED",
+    "SYN-T004": "NOT_BOOKED",
+    "SYN-T005": "UNRESOLVED",
+}
+
+
+def check_summary(summary: dict) -> list[str]:
+    """Every way ``summary`` differs from the documented demo result (empty = PASS)."""
+    problems = []
+    statuses = summary.get("reconciliation_statuses", {})
+    for uid, expected in EXPECTED_STATUSES.items():
+        if statuses.get(uid) != expected:
+            problems.append(f"{uid}: expected {expected}, got {statuses.get(uid)}")
+    unmatched = sorted(v for k, v in statuses.items() if k.startswith("unmatched:"))
+    if unmatched != ["UNCONFIRMED"]:
+        problems.append(f"unmatched rows: expected ['UNCONFIRMED'], got {unmatched}")
+    extra = sorted(set(statuses) - set(EXPECTED_STATUSES)
+                   - {k for k in statuses if k.startswith("unmatched:")})
+    if extra:
+        problems.append(f"unexpected reconciliation items: {extra}")
+    outcomes = summary.get("registration_outcomes", {})
+    if outcomes.get("dup") != "DUPLICATE" or outcomes.get("rev") != "REVISION":
+        problems.append(f"duplicate/revision detection wrong: {outcomes}")
+    checks = {
+        "documents_registered": 9,
+        "candidate_status": "CANDIDATE",
+        "candidate_snapshot_rows": 5,
+        "active_publication": None,
+        "audit_chain_ok": True,
+        "archive_problems": [],
+    }
+    for key, expected in checks.items():
+        if summary.get(key) != expected:
+            problems.append(f"{key}: expected {expected!r}, got {summary.get(key)!r}")
+    rows = {k: v["rows"] for k, v in summary.get("imports", {}).items()}
+    if rows != {"egistix": 3, "trader_a": 3, "trader_b": 2}:
+        problems.append(f"import row counts wrong: {rows}")
+    return problems

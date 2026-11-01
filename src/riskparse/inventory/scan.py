@@ -14,10 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from riskparse.evidence.hashing import UnstableFileError, fingerprint
+from riskparse.fswalk import check_output_location, walk_files
 from riskparse.inventory.template import CONTRACT_DOCUMENTS
 
 _HINT_FOLDERS = ("physical", "financial", "evergreen", "egistix", "trader sheets")
-_SKIP_NAMES = {"thumbs.db", "desktop.ini", ".ds_store"}
 
 
 @dataclass(frozen=True)
@@ -42,9 +42,8 @@ def scan_folder(root: str | os.PathLike[str], *, inventoried_by: str = "",
     findings: list[ScanFinding] = []
     by_hash: dict[str, list[str]] = defaultdict(list)
     by_name: dict[str, set[str]] = defaultdict(set)
-    files = sorted(p for p in root_path.rglob("*")
-                   if p.is_file() and not p.is_symlink() and p.name.lower() not in _SKIP_NAMES
-                   and not p.name.startswith("~$"))
+    files, walk_errors = walk_files(root_path)
+    findings.extend(ScanFinding("UNREADABLE", e) for e in walk_errors)
     for n, p in enumerate(files, start=1):
         rel = p.relative_to(root_path)
         try:
@@ -83,10 +82,12 @@ def scan_folder(root: str | os.PathLike[str], *, inventoried_by: str = "",
     return rows, findings
 
 
-def write_scan_csv(rows: list[dict[str, str]], out: str | os.PathLike[str]) -> Path:
-    path = Path(out)
+def write_scan_csv(rows: list[dict[str, str]], out: str | os.PathLike[str], *,
+                   scanned_root: str | os.PathLike[str] | None = None) -> Path:
+    """Write the scan CSV. Never overwrites, and never writes inside the scanned root."""
+    path = check_output_location(out, *([scanned_root] if scanned_root else []))
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
+    with path.open("x", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=CONTRACT_DOCUMENTS.headers, lineterminator="\n")
         w.writeheader()
         w.writerows(rows)

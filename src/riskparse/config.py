@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import re
 import tomllib
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -138,6 +139,14 @@ _INJECTION_CHARS = ("@", ";", "=", "://", "{", "}")
 _ENV_VAR_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
+def _type_ok(expected: type, value: Any) -> bool:
+    if expected is bool:
+        return isinstance(value, bool)
+    if expected is int:
+        return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, expected)
+
+
 def _check_types(section: str, data: dict[str, Any],
                  spec: dict[str, tuple[type, bool]]) -> None:
     unknown = sorted(set(data) - set(spec))
@@ -145,13 +154,7 @@ def _check_types(section: str, data: dict[str, Any],
         raise ConfigError(f"[{section}] has unknown key(s): {unknown}")
     for key, value in data.items():
         expected, _optional = spec[key]
-        if expected is bool:
-            ok = isinstance(value, bool)
-        elif expected is int:
-            ok = isinstance(value, int) and not isinstance(value, bool)
-        else:
-            ok = isinstance(value, expected)
-        if not ok:
+        if not _type_ok(expected, value):
             raise ConfigError(
                 f"[{section}] {key} must be a TOML {expected.__name__}, got "
                 f"{type(value).__name__} {value!r}. (Quoted values such as \"false\" are "
@@ -186,7 +189,34 @@ def _build(data: dict[str, Any], source: str | None) -> Settings:
     return settings
 
 
+def _validate_types(settings: Settings) -> None:
+    """Type-check the dataclass values themselves.
+
+    ``Settings`` can be built directly in code, bypassing the TOML loader, so the
+    connection layer re-validates here (Codex review: settings_bypass).
+    """
+    if not isinstance(settings, Settings):
+        raise ConfigError("settings must be a riskparse.config.Settings instance")
+    if not isinstance(settings.environment, str):
+        raise ConfigError("environment.name must be a string")
+    for section, obj, spec in (("database", settings.database, _DB_TYPES),
+                               ("paths", settings.paths, _PATHS_TYPES)):
+        for key, (expected, optional) in spec.items():
+            value = getattr(obj, key)
+            if value is None and optional:
+                continue
+            if not _type_ok(expected, value):
+                raise ConfigError(f"[{section}] {key} must be a {expected.__name__}, got "
+                                  f"{type(value).__name__} {value!r}")
+            if isinstance(value, str) and (
+                    unicodedata.normalize("NFKC", value) != value
+                    or any(unicodedata.category(ch) in ("Cc", "Cf") for ch in value)):
+                raise ConfigError(f"[{section}] {key} contains control, invisible or "
+                                  "look-alike (non-NFKC) characters")
+
+
 def validate(settings: Settings) -> None:
+    _validate_types(settings)
     db = settings.database
     if settings.environment not in ENVIRONMENTS:
         raise ConfigError(f"environment.name must be one of {ENVIRONMENTS}")
@@ -243,8 +273,18 @@ def load_settings(path: str | os.PathLike[str] | None = None) -> Settings:
 
     if candidate is None:
         return _build({}, None)
-    with candidate.open("rb") as fh:
-        data = tomllib.load(fh)
+    try:
+        raw = candidate.read_bytes()
+    except OSError as exc:
+        raise ConfigError(f"cannot read configuration file {candidate}: {exc}") from exc
+    if not raw.strip():
+        raise ConfigError(f"configuration file {candidate} is empty; refusing to fall back to "
+                          "defaults")
+    try:
+        data = tomllib.loads(raw.decode("utf-8"))
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
+        raise ConfigError(f"configuration file {candidate} is not valid UTF-8 TOML: {exc}") \
+            from exc
     return _build(data, str(candidate))
 
 

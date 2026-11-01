@@ -168,7 +168,24 @@ def test_register_links_members_to_zip(conn, tmp_path):
     docs = {d.document_id: d for d in conn.execute(select(source_documents))}
     assert docs[zip_reg.document_id].file_type == "ZIP"
     assert all(docs[x.document_id].parent_document_id == zip_reg.document_id for x in regs)
-    assert all("z.zip!/" in docs[x.document_id].original_path for x in regs)
+    from riskparse.db.schema import document_observations
+    obs = conn.execute(select(document_observations).where(
+        document_observations.c.container_document_id == zip_reg.document_id)).all()
+    assert sorted(o.observed_path.split("!/")[1] for o in obs) == ["a.pdf", "b/c.pdf"]
+    assert all(Path(docs[x.document_id].original_path).is_file() for x in regs)   # real files
+
+
+def test_repeated_member_keeps_every_container(conn, tmp_path):
+    """Same bytes in two archives: one document, two sightings, each with its own ZIP."""
+    from riskparse.db.schema import document_observations
+    r1 = safe_extract(_zip(tmp_path / "one.zip", [("a.pdf", b"same")]), tmp_path / "o1")
+    r2 = safe_extract(_zip(tmp_path / "two.zip", [("x/a.pdf", b"same")]), tmp_path / "o2")
+    z1, m1 = register_intake(conn, r1, actor="analyst", source_channel="Z", archive_root=None)
+    z2, m2 = register_intake(conn, r2, actor="analyst", source_channel="Z", archive_root=None)
+    assert m1[0].document_id == m2[0].document_id and m2[0].outcome == "DUPLICATE"
+    containers = {o.container_document_id for o in conn.execute(select(document_observations)
+        .where(document_observations.c.document_id == m1[0].document_id))}
+    assert containers == {z1.document_id, z2.document_id}
 
 
 def test_register_detects_member_changed_after_extraction(conn, tmp_path):

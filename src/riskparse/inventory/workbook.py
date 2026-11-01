@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from riskparse.evidence.hashing import is_sha256_hex
-from riskparse.identity import same_person
+from riskparse.identity import InvalidIdentity, normalize_actor, same_person
 from riskparse.inventory.template import (
     INSTRUCTIONS,
     KIND_DATE,
@@ -133,9 +133,48 @@ WARNING = "WARNING"      # suspicious; needs a human look
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 _TS_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?\s*(Z|[+-]\d{2}:?\d{2}|[A-Z]{2,5}|"
-    r"[A-Za-z]+/[A-Za-z_]+)$"
+    r"^(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})[ T](?P<h>[0-9]{2}):(?P<m>[0-9]{2})"
+    r"(?::(?P<s>[0-9]{2}))?\s*(?P<tz>Z|[+-][0-9]{2}:?[0-9]{2}|[A-Z]{2,5}|"
+    r"[A-Za-z]+(?:/[A-Za-z_+-]+)+)$", re.ASCII
 )
+# Timezone abbreviations accepted in the inventory. Abbreviations are ambiguous worldwide,
+# so only the North American zones relevant to a Calgary desk, plus UTC/GMT, are allowed.
+TZ_ABBREVIATIONS = {"UTC": 0, "GMT": 0, "MST": -7, "MDT": -6, "PST": -8, "PDT": -7,
+                    "CST": -6, "CDT": -5, "EST": -5, "EDT": -4}
+
+
+def timestamp_problem(value: str) -> str | None:
+    """Why ``value`` is not a real date/time with a real timezone, or None (Codex review)."""
+    m = _TS_RE.match(value)
+    if not m:
+        return "expected 'YYYY-MM-DD HH:MM' plus an explicit timezone"
+    try:
+        date.fromisoformat(m["date"])
+    except ValueError:
+        return "invalid calendar date"
+    if int(m["h"]) > 23 or int(m["m"]) > 59 or (m["s"] and int(m["s"]) > 59):
+        return "invalid time of day"
+    tz = m["tz"]
+    if tz == "Z":
+        return None
+    if tz[0] in "+-":
+        digits = tz[1:].replace(":", "")
+        hours, minutes = int(digits[:2]), int(digits[2:])
+        if hours > 14 or minutes > 59 or (hours == 14 and minutes):
+            return f"invalid UTC offset {tz}"
+        return None
+    if "/" not in tz:
+        return None if tz in TZ_ABBREVIATIONS else (
+            f"unknown timezone abbreviation {tz}; use one of {sorted(TZ_ABBREVIATIONS)} or an "
+            "offset such as -07:00")
+    try:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        ZoneInfo(tz)
+    except ZoneInfoNotFoundError:
+        return f"unknown timezone {tz}"
+    except Exception:  # pragma: no cover - tz database unavailable (e.g. Windows w/o tzdata)
+        return f"cannot verify timezone {tz} on this machine; use an offset such as -07:00"
+    return None
 
 
 @dataclass(frozen=True)
@@ -193,9 +232,8 @@ def _check_value(sheet: InvSheet, col, value: str, row: int, issues: list[Issue]
                 issues.append(Issue(ERROR, sheet.name, row, col.name, "invalid calendar date"))
     elif col.kind == KIND_MONTH and not _MONTH_RE.match(value):
         issues.append(Issue(ERROR, sheet.name, row, col.name, "expected YYYY-MM"))
-    elif col.kind == KIND_TIMESTAMP and not _TS_RE.match(value):
-        issues.append(Issue(ERROR, sheet.name, row, col.name,
-                            "expected 'YYYY-MM-DD HH:MM' plus an explicit timezone"))
+    elif col.kind == KIND_TIMESTAMP and (problem := timestamp_problem(value)):
+        issues.append(Issue(ERROR, sheet.name, row, col.name, problem))
     elif col.kind == KIND_INT and not value.isdigit():
         issues.append(Issue(ERROR, sheet.name, row, col.name, "expected a whole number"))
     elif col.kind == KIND_SHA256 and not is_sha256_hex(value.lower()):
@@ -241,7 +279,22 @@ def validate_rows(rows_by_sheet: dict[str, list[dict[str, str]]],
     return issues
 
 
+# Columns that name a person. A value that cannot be normalized to a valid identity
+# (invisible/control characters, blank after trimming, too long) is an ERROR rather than
+# silently counting as "a different person" (Codex review #3).
+PERSON_COLUMNS = ("confirmed_by_risk", "source_owner", "inventoried_by", "exported_by",
+                  "maintained_by", "reviewed_by", "risk_approver", "finance_approver",
+                  "keyed_by", "verified_by")
+
+
 def _row_rules(sheet: str, row: dict[str, str], r_i: int, issues: list[Issue]) -> None:
+    for col in PERSON_COLUMNS:
+        value = row.get(col, "")
+        if value:
+            try:
+                normalize_actor(value)
+            except InvalidIdentity as exc:
+                issues.append(Issue(ERROR, sheet, r_i, col, f"invalid person identity: {exc}"))
     if sheet == "Contract_Documents":
         if row.get("inventory_status") in ("EXCEPTED", "MISSING", "OUT_OF_SCOPE") and not row.get(
                 "exception_reason"):
@@ -306,6 +359,30 @@ def _cross_rules(rows_by_sheet: dict[str, list[dict[str, str]]], issues: list[Is
 
 
 def read_xlsx(path: str | Path) -> tuple[dict[str, list[dict[str, str]]], dict[str, list[str]]]:
+    rows, headers, _formulas = _read_xlsx_with_formulas(path)
+    return rows, headers
+
+
+def _formula_cells(path: str | Path) -> list[tuple[str, int, str]]:
+    """(sheet, row, coordinate) of every formula cell in the inventory sheets."""
+    wb = load_workbook(path, read_only=True, data_only=False)
+    found = []
+    try:
+        for name in SHEETS_BY_NAME:
+            if name not in wb.sheetnames:
+                continue
+            for row in wb[name].iter_rows():
+                for cell in row:
+                    v = getattr(cell, "value", None)
+                    if isinstance(v, str) and v.startswith("="):
+                        found.append((name, cell.row, cell.coordinate))
+    finally:
+        wb.close()
+    return found
+
+
+def _read_xlsx_with_formulas(path: str | Path):
+    formulas = _formula_cells(path)
     wb = load_workbook(path, read_only=True, data_only=True)
     rows_by_sheet: dict[str, list[dict[str, str]]] = {}
     headers_by_sheet: dict[str, list[str]] = {}
@@ -326,9 +403,14 @@ def read_xlsx(path: str | Path) -> tuple[dict[str, list[dict[str, str]]], dict[s
                          for i, h in enumerate(headers)})
         rows_by_sheet[name] = rows
     wb.close()
-    return rows_by_sheet, headers_by_sheet
+    return rows_by_sheet, headers_by_sheet, formulas
 
 
 def validate_xlsx(path: str | Path) -> list[Issue]:
-    rows, headers = read_xlsx(path)
-    return validate_rows(rows, headers)
+    rows, headers, formulas = _read_xlsx_with_formulas(path)
+    # A formula cell has no saved value until Excel recalculates, so its row would read as
+    # empty and vanish. The inventory is a record: values must be typed (Codex review).
+    issues = [Issue(ERROR, sheet, row, coord, "cell contains a formula; enter the value "
+                    "itself (formulas may have no saved value and the row would be lost)")
+              for sheet, row, coord in formulas]
+    return issues + validate_rows(rows, headers)

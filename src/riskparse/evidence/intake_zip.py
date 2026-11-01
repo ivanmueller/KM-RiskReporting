@@ -31,6 +31,7 @@ import os
 import re
 import stat
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -127,6 +128,69 @@ def _open_exclusive(target: Path):
                 raise ZipIntakeError(f"too many members named {target.name}") from None
 
 
+# POSIX: create every directory and file relative to an already-open parent directory with
+# O_NOFOLLOW, so a folder swapped for a symlink mid-extraction cannot redirect a write
+# outside the extraction root (Codex review #11).
+_SECURE_FS = (hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY")
+              and os.open in os.supports_dir_fd and os.mkdir in os.supports_dir_fd)
+
+
+def _dup_name(name: str, n: int) -> str:
+    p = PurePosixPath(name)
+    return f"{p.stem}__dup{n}{p.suffix}"
+
+
+def _secure_create(root: Path, parts: tuple[str, ...]):
+    """Create ``root/parts`` exclusively without following links. Returns (path, file)."""
+    if _SECURE_FS:
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for part in parts[:-1]:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                try:
+                    nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                  dir_fd=fd)
+                except OSError as exc:
+                    raise ZipIntakeError(f"folder {part!r} is not a plain directory (link or "
+                                         f"file swapped in during extraction): {exc}") from exc
+                os.close(fd)
+                fd = nfd
+            n, name = 1, parts[-1]
+            while True:
+                try:
+                    ffd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                  0o600, dir_fd=fd)
+                    break
+                except FileExistsError:
+                    n += 1
+                    if n > 1000:
+                        raise ZipIntakeError(f"too many members named {parts[-1]}") from None
+                    name = _dup_name(parts[-1], n)
+            return root.joinpath(*parts[:-1], name), os.fdopen(ffd, "wb")
+        finally:
+            os.close(fd)
+    # Windows has no dir_fd: verify containment of the real path just before and after
+    # creating the file (narrows, but cannot fully close, the race on that platform).
+    cur = root
+    for part in parts[:-1]:
+        cur = cur / part
+        cur.mkdir(exist_ok=True)
+        if cur.is_symlink() or root not in cur.resolve().parents:
+            raise ZipIntakeError(f"folder {cur} is a link or resolves outside the extraction "
+                                 "root")
+    final, fh = _open_exclusive(cur / parts[-1])
+    if final.resolve().parent != cur.resolve() or root not in final.resolve().parents:
+        fh.close()
+        raise ZipIntakeError(f"{final} resolves outside the extraction root")
+    return final, fh
+
+
+_CORRUPT = (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError)
+
+
 def safe_extract(zip_path: str | os.PathLike[str], extract_dir: str | os.PathLike[str], *,
                  max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
                  max_members: int = DEFAULT_MAX_MEMBERS,
@@ -136,6 +200,8 @@ def safe_extract(zip_path: str | os.PathLike[str], extract_dir: str | os.PathLik
     fp = fingerprint(src)                       # hash the archive exactly as received
     if not zipfile.is_zipfile(src):
         raise ZipIntakeError(f"{src} is not a ZIP archive")
+    if dest.is_symlink():
+        raise ZipIntakeError(f"{dest} is a symbolic link; extract into a real, new directory")
     if dest.exists() and (not dest.is_dir() or any(dest.iterdir())):
         raise ZipIntakeError(f"{dest} must be a new or empty directory")
     dest.mkdir(parents=True, exist_ok=True)
@@ -143,7 +209,11 @@ def safe_extract(zip_path: str | os.PathLike[str], extract_dir: str | os.PathLik
     # Store absolute paths so the manifest is unambiguous wherever it is opened.
     result = ZipIntakeResult(src.resolve(), fp.sha256, fp.size_bytes, root)
 
-    with zipfile.ZipFile(src) as zf:
+    try:
+        zf = zipfile.ZipFile(src)
+    except _CORRUPT as exc:
+        raise ZipIntakeError(f"{src} cannot be read as a ZIP: {exc}") from exc
+    with zf:
         infos = [i for i in zf.infolist() if not i.is_dir()]
         if len(infos) > max_members:
             raise ZipIntakeError(f"{len(infos)} members exceeds limit {max_members}")
@@ -186,22 +256,34 @@ def safe_extract(zip_path: str | os.PathLike[str], extract_dir: str | os.PathLik
                     "CASE_COLLISION", name, f"differs only by letter case from "
                     f"{seen_casefold[folded]}; they collide on Windows / the L drive"))
             seen_casefold.setdefault(folded, str(rel))
-            target.parent.mkdir(parents=True, exist_ok=True)
-            final, out = _open_exclusive(target)
+            final, out = _secure_create(root, rel.parts)
             if final != target:
                 result.findings.append(Finding("DUPLICATE_NAME", name,
                                                f"name already used; kept as {final.name}"))
             digest = hashlib.sha256()
             size = 0
-            with out, zf.open(info) as member:   # zipfile verifies the CRC at EOF
-                while chunk := member.read(_CHUNK):
-                    size += len(chunk)
-                    written_total += len(chunk)
-                    if size > info.file_size or written_total > max_total_bytes:
-                        raise ZipIntakeError(f"{name}: more bytes than declared; aborting")
-                    digest.update(chunk)
-                    out.write(chunk)
-            os.chmod(final, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+            try:
+                with out, zf.open(info) as member:   # zipfile verifies the CRC at EOF
+                    while chunk := member.read(_CHUNK):
+                        size += len(chunk)
+                        written_total += len(chunk)
+                        if size > info.file_size or written_total > max_total_bytes:
+                            raise ZipIntakeError(f"{name}: more bytes than declared; aborting")
+                        digest.update(chunk)
+                        out.write(chunk)
+                    out.flush()
+                    if hasattr(os, "fchmod"):   # set read-only through the open handle
+                        os.fchmod(out.fileno(), stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+            except _CORRUPT as exc:
+                # Corrupt member (bad CRC, broken deflate stream): remove the partial
+                # file and record it as refused, so it appears in the manifest (Codex #24).
+                final.unlink(missing_ok=True)
+                result.findings.append(Finding("CORRUPT_MEMBER", name, f"member data is "
+                                               f"corrupt and was not extracted: {exc}"))
+                result.skipped.append(name)
+                continue
+            if not hasattr(os, "fchmod"):
+                os.chmod(final, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
             suffix = final.suffix.lower()
             if suffix in NESTED_ARCHIVE_SUFFIXES:
                 result.findings.append(Finding("NESTED_ARCHIVE", name, "extracted as a file, "
@@ -213,6 +295,10 @@ def safe_extract(zip_path: str | os.PathLike[str], extract_dir: str | os.PathLik
                 result.findings.append(Finding("EMPTY_FILE", name, "zero-byte member"))
             result.members.append(ExtractedMember(name, final, digest.hexdigest(), size,
                                                   _zip_timestamp(info)))
+    after = fingerprint(src)
+    if after.sha256 != fp.sha256:
+        raise ZipIntakeError(f"{src} changed while it was being extracted; discard "
+                             f"{dest} and run the intake again on a stable copy")
     return result
 
 
@@ -286,6 +372,7 @@ def register_intake(conn: Connection, result: ZipIntakeResult, *, actor: str,
         reg = register_document(conn, m.path, actor=actor, source_channel=source_channel,
                                 sender=sender, received_at=received_at,
                                 parent_document_id=zip_reg.document_id,
+                                container_document_id=zip_reg.document_id,
                                 archive_root=archive_root,
                                 observed_path=f"{result.zip_path}!/{m.member}")
         if reg.sha256 != m.sha256:

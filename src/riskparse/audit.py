@@ -39,7 +39,11 @@ def _event_hash(row: dict[str, Any]) -> str:
     for key in _HASHED_FIELDS:
         v = row.get(key)
         if isinstance(v, datetime):
-            v = v.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Whole seconds keep the original format (so existing chains still verify);
+            # any sub-second part is included, so a microsecond edit changes the hash
+            # (Codex review #13).
+            v = v.astimezone(UTC)
+            v = v.strftime("%Y-%m-%dT%H:%M:%S.%fZ" if v.microsecond else "%Y-%m-%dT%H:%M:%SZ")
         payload[key] = v
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
@@ -58,6 +62,9 @@ def record(conn: Connection, *, actor: str, action: str, entity_type: str, entit
         approver = normalize_actor(approver)
         if approver == actor:
             raise ValueError("approver must differ from actor (separation of duties)")
+    if occurred_at is not None and (occurred_at.tzinfo is None
+                                    or occurred_at.utcoffset() is None):
+        raise ValueError("occurred_at must be timezone-aware (Codex review #20)")
     ts = (occurred_at or datetime.now(UTC)).astimezone(UTC).replace(microsecond=0)
     prev = conn.execute(
         select(audit_events.c.event_hash).order_by(audit_events.c.event_id.desc()).limit(1)
@@ -89,14 +96,43 @@ class ChainVerification:
     problem: str | None = None
 
 
-def verify_chain(conn: Connection) -> ChainVerification:
+def chain_head(conn: Connection) -> tuple[int, str | None]:
+    """(event count, hash of the last event). Record this OUTSIDE the database."""
+    rows = conn.execute(select(audit_events.c.event_hash).order_by(audit_events.c.event_id))
+    hashes = [r.event_hash for r in rows]
+    return len(hashes), (hashes[-1] if hashes else None)
+
+
+def verify_chain(conn: Connection, *, expect_count: int | None = None,
+                 expect_head: str | None = None) -> ChainVerification:
+    """Verify every link and hash.
+
+    Edits, reordering and deletions *inside* the chain are always detected. Deleting the
+    most recent events (truncation) can only be detected against an anchor recorded
+    outside the database: pass the ``(count, head)`` from an earlier :func:`chain_head`.
+    The chain may have grown since; the event at that position must still carry that
+    hash (Codex review #14).
+    """
+    if (expect_count is None) != (expect_head is None):
+        raise ValueError("expect_count and expect_head must be given together")
     prev: str | None = None
     count = 0
+    anchor_seen = expect_count is None
     for r in conn.execute(select(audit_events).order_by(audit_events.c.event_id)).mappings():
         count += 1
         if r["prev_event_hash"] != prev:
             return ChainVerification(False, count, r["event_id"], "broken prev_event_hash link")
         if _event_hash(dict(r)) != r["event_hash"]:
             return ChainVerification(False, count, r["event_id"], "event content altered")
+        if expect_count is not None and count == expect_count:
+            if r["event_hash"] != expect_head:
+                return ChainVerification(False, count, r["event_id"],
+                                         "event at the anchor position does not match the "
+                                         "recorded head hash")
+            anchor_seen = True
         prev = r["event_hash"]
+    if not anchor_seen:
+        return ChainVerification(False, count, None,
+                                 f"chain has {count} event(s) but the anchor recorded "
+                                 f"{expect_count}: events were deleted (truncation)")
     return ChainVerification(True, count)

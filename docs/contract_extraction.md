@@ -56,7 +56,9 @@ riskparse intake-zip "C:\Users\ivanm\Downloads\Risk Program.zip" --extract-to "C
 ```
 
 - Replace `--received-at` with when the ZIP was actually received, including the offset
-  (`-07:00` is Mountain Standard Time), or leave it out if unknown.
+  (`-07:00` is Mountain Standard Time), or leave it out if unknown. All arguments are checked
+  before anything is extracted. The manifest must be outside the extraction folder and must
+  not already exist.
 - The ZIP is hashed and registered unchanged. Every file is extracted read-only and registered
   with the ZIP as its parent.
 - Read every line it prints. `UNSAFE_PATH`, `ENCRYPTED`, `MACRO_ENABLED`, `NESTED_ARCHIVE`,
@@ -96,6 +98,11 @@ The counts decide which layouts get a parser first.
 riskparse extract --all
 riskparse audit-verify
 ```
+
+`audit-verify` also prints an **anchor**, for example `--expect-count 42 --expect-head 9f3c…`.
+Record it outside the database, such as in the inventory sign-off or an email to Risk. Next time,
+run `riskparse audit-verify --expect-count 42 --expect-head 9f3c…`: it fails if any of those
+events were later deleted. Without an anchor, deleting the most recent events cannot be detected.
 
 - Each registered PDF, workbook and email is re-hashed against its registration, then
   extracted. Altered evidence is refused (exit code 5).

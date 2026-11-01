@@ -16,7 +16,7 @@ for a gate that needs real data or sign-off.
 
 - **Stage 1, Phase 1 (foundation):** done.
 - **Week 1 discovery:** in progress. The October trade zip has been received and needs to be inventoried.
-- **Engineering:** B1–B5, B7 and B8 are done. Contract **text extraction** (`.pdf`, `.xlsx`, `.msg` with attachments), `profile-documents` and layout fingerprints are built (264 tests). The Codex review (B6) is in progress.
+- **Engineering:** B1–B8 are done. The first Codex review's 26 findings are fixed, with migration `0004`; see `HANDOFF.md` §10 (334 tests). Contract **text extraction** (`.pdf`, `.xlsx`, `.msg` with attachments), `profile-documents` and layout fingerprints are built. Next: a second Codex review at `HEAD` (B9).
 - **Your next step:** run `docs/contract_extraction.md` steps 1–4 on the October zip and send back the profile **summary** (counts only). It decides which counterparty layouts get a parser first.
 
 ## NOW — next actions (in order)
@@ -55,7 +55,8 @@ for a gate that needs real data or sign-off.
 - [x] **B3. Fix D-3:** accept real Excel date cells in the inventory validator.
 - [x] **B4. Fix D-4:** make the creator/approver identity checks case-insensitive. *(identity normalization plus migration `0002`; also fixed D-6, a migration failure on SQLite databases holding linked rows)*
 - [x] **B5. Fix D-5:** reject unknown config keys and sections cleanly.
-- [ ] **B6. Run the Codex review** (you run it; prompt updated for the fixes) (`docs/review/codex_stress_test_prompt.md`) and triage its findings into `HANDOFF.md`.
+- [x] **B6. Run the Codex review.** *Run on `070c321`; all 26 findings fixed, corrected or guarded, with regression tests (`HANDOFF.md` §10).*
+- [ ] **B9. Run a second Codex review at `HEAD`** with prompt revision 5. It covers the extraction slice and the review-1 fixes, which review 1 did not see. (`docs/review/codex_stress_test_prompt.md`) and triage its findings into `HANDOFF.md`.
 - [x] **B7. Fix S-1** (a row compared on nothing must not be `MATCHED`) and **S-4** (re-check the file hash before importing). *Also fixed S-5 (CSV shape errors) and S-13 (data dictionary generator).*
 - [x] **B8. Add a safe "register intake zip" command** (`riskparse intake-zip`, with `--register` to also write to the DB): hash the zip, extract it without zip-slip,
   register each member with `parent_document_id` pointing at the zip, and record nested archives as exceptions.
@@ -90,7 +91,7 @@ for a gate that needs real data or sign-off.
 - [x] Exact-reference reconciliation slice
 - [x] End-to-end smoke demo on synthetic data (candidate only, never published)
 - [x] Docs: scope, SQL checklist, inventory guide, blockers, `HANDOFF.md`, review prompt
-- [x] 226 tests passing at the end of the B-fixes, `ruff` clean, setup verified in a clean environment (264 after the extraction slice)
+- [x] 226 tests passing at the end of the B-fixes, `ruff` clean, setup verified in a clean environment (264 after the extraction slice; 334 after the Codex review-1 fixes)
 
 ### Week 1 (Nov 2–6) — Discovery and economic scope
 

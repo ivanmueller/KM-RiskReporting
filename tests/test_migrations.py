@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, select
 from riskparse.db import migrate
 from riskparse.db.schema import active_publication, metadata
 
-HEAD = "0003_document_extraction"
+HEAD = "0004_review_fixes"
 
 
 def test_single_head():
@@ -100,9 +100,22 @@ def test_migration_files_are_frozen():
     """Migrations must not import the live schema module."""
     files = sorted((migrate.MIGRATIONS_DIR / "versions").glob("0*.py"))
     assert [f.name for f in files] == ["0001_initial.py", "0002_sod_case_and_zip.py",
-                                      "0003_document_extraction.py"]
+                                      "0003_document_extraction.py", "0004_review_fixes.py"]
     for f in files:
         assert "riskparse" not in f.read_text().split('"""', 2)[2], f.name
+
+
+def _insert_linked_rows_at_0001(conn):
+    """Plain SQL rows valid at revision 0001 (no dependence on today's application code)."""
+    from sqlalchemy import text
+    conn.execute(text(
+        "INSERT INTO source_documents (document_id, sha256, size_bytes, file_type, "
+        "original_filename, original_path, source_channel, recorded_at_utc, content_status, "
+        "is_synthetic) VALUES ('DOC-1', :h, 1, 'PDF', 'a.pdf', '/x/a.pdf', 'T', "
+        "'2026-10-31 00:00:00', 'REGISTERED', 1)"), {"h": "a" * 64})
+    conn.execute(text(
+        "INSERT INTO document_observations (document_id, observed_path, observed_filename, "
+        "observed_at_utc) VALUES ('DOC-1', '/x/a.pdf', 'a.pdf', '2026-10-31 00:00:00')"))
 
 
 def _fk_engine(tmp_path, name="fk.db"):
@@ -118,13 +131,10 @@ def test_upgrade_with_linked_rows_under_enforced_foreign_keys(tmp_path):
     from sqlalchemy import func, text
 
     from riskparse.db.schema import document_observations
-    from riskparse.evidence.registry import register_document
     eng = _fk_engine(tmp_path)
     migrate.upgrade(eng, "0001_initial")
-    f = tmp_path / "a.pdf"
-    f.write_bytes(b"x")
     with eng.begin() as c:
-        register_document(c, f, actor="t", source_channel="T")
+        _insert_linked_rows_at_0001(c)
     migrate.upgrade(eng)
     migrate.downgrade(eng, "0001_initial")
     migrate.upgrade(eng)
@@ -156,8 +166,6 @@ def test_guard_rolls_back_when_foreign_keys_would_break(tmp_path):
 def test_alembic_cli_path_uses_the_same_guard(tmp_path, monkeypatch):
     from alembic import command
     from alembic.config import Config
-
-    from riskparse.evidence.registry import register_document
     db = tmp_path / "cli.db"
     cfg_file = tmp_path / "s.toml"
     cfg_file.write_text(f'[environment]\nname="test"\n[database]\nbackend="sqlite"\n'
@@ -167,10 +175,8 @@ def test_alembic_cli_path_uses_the_same_guard(tmp_path, monkeypatch):
     cfg.set_main_option("script_location", str(migrate.MIGRATIONS_DIR))
     command.upgrade(cfg, "0001_initial")
     eng = _fk_engine(tmp_path, "cli.db")
-    f = tmp_path / "a.pdf"
-    f.write_bytes(b"x")
     with eng.begin() as c:
-        register_document(c, f, actor="t", source_channel="T")
+        _insert_linked_rows_at_0001(c)
     eng.dispose()
     command.upgrade(cfg, "head")
     eng = _fk_engine(tmp_path, "cli.db")

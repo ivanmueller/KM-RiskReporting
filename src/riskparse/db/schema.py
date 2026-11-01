@@ -24,7 +24,6 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
-    Numeric,
     PrimaryKeyConstraint,
     String,
     Table,
@@ -35,6 +34,7 @@ from sqlalchemy.sql.elements import conv
 from sqlalchemy.types import TypeDecorator
 
 from riskparse import vocab
+from riskparse.numeric import ExactNumeric
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -46,13 +46,13 @@ NAMING_CONVENTION = {
 
 metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
-MONEY = Numeric(28, 10)
+MONEY = ExactNumeric()      # NUMERIC(28,10); refuses values it would change (riskparse.numeric)
 # Portable shape checks (LIKE '_' wildcards work on SQLite, SQL Server and PostgreSQL;
 # LENGTH()/LEN() differ between engines so they are avoided). Hex content is enforced
 # in application code (riskparse.evidence.hashing.is_sha256_hex).
 SHA256_LIKE = "_" * 64
 MONTH_LIKE = "____-__"
-QTY = Numeric(28, 10)
+QTY = ExactNumeric()
 
 
 class UTCDateTime(TypeDecorator):
@@ -147,6 +147,10 @@ document_observations = Table(
     Column("observed_filename", String(400), nullable=False),
     Column("observed_at_utc", UTCDateTime(), nullable=False),
     Column("file_modified_at_utc", UTCDateTime(), nullable=True),
+    # The archive/email this sighting came from (migration 0004), so a file seen inside
+    # two ZIPs keeps both containers instead of only the first parent_document_id.
+    Column("container_document_id", String(40), ForeignKey("source_documents.document_id"),
+           nullable=True),
     Index("ix_document_observations_document_id", "document_id"),
 )
 
@@ -271,6 +275,8 @@ source_imports = Table(
     Column("row_count", Integer, nullable=True),
     Column("status", String(20), nullable=False, server_default="STAGED"),
     Column("parser_version", String(60), nullable=False),
+    # Field-level parse exceptions, kept so an idempotent retry still reports them (0004).
+    Column("unparsed_json", Text, nullable=True),
     UniqueConstraint("document_id", "source_system", "parser_version"),
     CheckConstraint(_in("source_system", vocab.SOURCE_SYSTEMS), name="source_system"),
     CheckConstraint(_in("status", vocab.IMPORT_STATUSES), name="status"),
@@ -399,6 +405,10 @@ publication_runs = Table(
     # Separation of duties: the creator of a candidate cannot be its approver.
     CheckConstraint("approved_by IS NULL OR LOWER(approved_by) <> LOWER(created_by)",
                     name="approver_sod"),
+    # No surrounding whitespace, so 'pat ' cannot pass as a different person (0004).
+    CheckConstraint("created_by = LTRIM(RTRIM(created_by))", name="created_by_trimmed"),
+    CheckConstraint("approved_by IS NULL OR approved_by = LTRIM(RTRIM(approved_by))",
+                    name="approved_by_trimmed"),
     CheckConstraint("status NOT IN ('APPROVED', 'PUBLISHED', 'SUPERSEDED') OR "
                     "(approved_by IS NOT NULL AND approved_at_utc IS NOT NULL)",
                     name="approved_has_approver"),
@@ -526,6 +536,9 @@ audit_events = Table(
     Column("event_hash", String(64), nullable=False),
     UniqueConstraint("event_hash"),
     CheckConstraint("approver IS NULL OR LOWER(approver) <> LOWER(actor)", name="approver_sod"),
+    CheckConstraint("actor = LTRIM(RTRIM(actor))", name="actor_trimmed"),
+    CheckConstraint("approver IS NULL OR approver = LTRIM(RTRIM(approver))",
+                    name="approver_trimmed"),
     Index("ix_audit_events_entity", "entity_type", "entity_id"),
 )
 

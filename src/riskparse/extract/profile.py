@@ -28,6 +28,7 @@ from pathlib import Path
 from riskparse.evidence.hashing import UnstableFileError, file_type_for, fingerprint
 from riskparse.extract.base import ExtractionResult
 from riskparse.extract.dispatch import extract_bytes
+from riskparse.fswalk import check_output_location, walk_files
 
 COLUMNS = [
     "relative_path", "parent", "file_name", "folder_class", "file_type", "size_bytes", "sha256",
@@ -35,7 +36,6 @@ COLUMNS = [
     "formulas_without_cached_value", "segments", "text_chars", "email_body_source",
     "attachments", "attachment_types", "warnings",
 ]
-_SKIP = {"thumbs.db", "desktop.ini", ".ds_store"}
 
 
 _DIGITS = re.compile(r"[0-9]+")
@@ -126,8 +126,11 @@ def profile_folder(root: str | os.PathLike[str]) -> ProfileResult:
     if not base.is_dir():
         raise NotADirectoryError(base)
     rows: list[dict[str, str]] = []
-    files = sorted(p for p in base.rglob("*") if p.is_file() and not p.is_symlink()
-                   and p.name.lower() not in _SKIP and not p.name.startswith("~$"))
+    files, walk_errors = walk_files(base)
+    for err in walk_errors:   # unreadable folders/links are reported, never skipped silently
+        rows.append({**{c: "" for c in COLUMNS}, "relative_path": err.split(": ", 1)[0],
+                     "folder_class": "UNKNOWN", "file_type": "OTHER", "status": "FAILED",
+                     "warnings": f"not read: {err}"})
     for p in files:
         rel = p.relative_to(base)
         fclass = folder_class(rel)
@@ -158,8 +161,9 @@ def profile_folder(root: str | os.PathLike[str]) -> ProfileResult:
     return ProfileResult(rows)
 
 
-def write_profile(result: ProfileResult, out: str | os.PathLike[str]) -> Path:
-    path = Path(out)
+def write_profile(result: ProfileResult, out: str | os.PathLike[str], *,
+                  scanned_root: str | os.PathLike[str] | None = None) -> Path:
+    path = check_output_location(out, *([scanned_root] if scanned_root else []))
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("x", newline="", encoding="utf-8") as fh:     # never overwrite
         w = csv.DictWriter(fh, fieldnames=COLUMNS, lineterminator="\n")

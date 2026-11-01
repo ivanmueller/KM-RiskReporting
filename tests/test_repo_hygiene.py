@@ -1,5 +1,6 @@
-"""Guard against committing confidential material (game plan 13.3)."""
+"""Guard against committing confidential material (game plan 13.3; Codex review)."""
 
+import csv
 import shutil
 import subprocess
 from pathlib import Path
@@ -8,7 +9,8 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 FORBIDDEN = {".pdf", ".msg", ".eml", ".tif", ".tiff", ".docx", ".doc", ".xls", ".xlsm",
-             ".db", ".sqlite", ".pfx", ".pem", ".key", ".zip"}
+             ".xlsx", ".csv", ".zip", ".7z", ".rar", ".rtf", ".db", ".sqlite", ".sqlite3",
+             ".pfx", ".p12", ".pem", ".key"}
 TEMPLATE_DIR = "inventory/templates/"
 
 
@@ -20,15 +22,23 @@ def _tracked():
     return [line for line in out.splitlines() if line]
 
 
+def _expected_template_names():
+    from riskparse.inventory.template import SHEETS
+    return {f"{TEMPLATE_DIR}October_2026_Source_Inventory_TEMPLATE.xlsx"} | {
+        f"{TEMPLATE_DIR}inventory_{s.name}.csv" for s in SHEETS}
+
+
 def test_no_confidential_file_types_tracked():
-    bad = [f for f in _tracked() if Path(f).suffix.lower() in FORBIDDEN]
+    """Every extension counts, case-insensitively: contract.PDF and contract.pdf.txt fail."""
+    templates = _expected_template_names()
+    bad = [f for f in _tracked() if f not in templates
+           and {s.lower() for s in Path(f).suffixes} & FORBIDDEN]
     assert bad == []
 
 
-def test_spreadsheets_only_in_template_dir():
-    bad = [f for f in _tracked() if Path(f).suffix.lower() in {".xlsx", ".csv"}
-           and not f.startswith(TEMPLATE_DIR)]
-    assert bad == []
+def test_template_dir_holds_exactly_the_generated_templates():
+    in_dir = {f for f in _tracked() if f.startswith(TEMPLATE_DIR)}
+    assert in_dir == _expected_template_names()
 
 
 def test_no_local_settings_or_env_files_tracked():
@@ -37,13 +47,38 @@ def test_no_local_settings_or_env_files_tracked():
     assert bad == []
 
 
-def test_committed_template_matches_generator(tmp_path):
+def test_committed_csv_templates_equal_generator_output(tmp_path):
+    from riskparse.inventory.workbook import write_csv_templates
+    for generated in write_csv_templates(tmp_path):
+        committed = REPO / TEMPLATE_DIR / generated.name
+        assert committed.read_bytes() == generated.read_bytes(), generated.name
+
+
+def test_committed_xlsx_template_equals_generator_output(tmp_path):
+    """Every cell and every data validation, not just the headers (Codex review C9)."""
     from openpyxl import load_workbook
 
-    from riskparse.inventory.template import SHEETS
+    from riskparse.inventory.workbook import write_xlsx_template
     committed = REPO / TEMPLATE_DIR / "October_2026_Source_Inventory_TEMPLATE.xlsx"
-    if not committed.exists():
-        pytest.skip("template not generated yet")
-    wb = load_workbook(committed)
+    fresh = write_xlsx_template(tmp_path / "t.xlsx")
+    a, b = load_workbook(committed), load_workbook(fresh)
+    assert a.sheetnames == b.sheetnames
+    for name in a.sheetnames:
+        wa, wb = a[name], b[name]
+        cells_a = {(c.coordinate, c.value) for row in wa.iter_rows() for c in row
+                   if c.value is not None}
+        cells_b = {(c.coordinate, c.value) for row in wb.iter_rows() for c in row
+                   if c.value is not None}
+        assert cells_a == cells_b, name
+        dv_a = sorted((str(d.sqref), d.formula1) for d in wa.data_validations.dataValidation)
+        dv_b = sorted((str(d.sqref), d.formula1) for d in wb.data_validations.dataValidation)
+        assert dv_a == dv_b, name
+
+
+def test_csv_templates_contain_no_data_beyond_seed_rows():
+    from riskparse.inventory.template import SHEETS
     for s in SHEETS:
-        assert [c.value for c in wb[s.name][1]][: len(s.headers)] == s.headers
+        with (REPO / TEMPLATE_DIR / f"inventory_{s.name}.csv").open(newline="",
+                                                                     encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        assert len(rows) == len(s.seed_rows), s.name

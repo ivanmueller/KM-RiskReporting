@@ -73,14 +73,23 @@ def cmd_register(args) -> int:
 
 
 def cmd_audit_verify(args) -> int:
+    from sqlalchemy import text
+
     from riskparse import audit
     from riskparse.db.connection import create_db_engine
     from riskparse.evidence.registry import verify_archive
     engine = create_db_engine(_settings(args))
     with engine.connect() as conn:
-        chain = audit.verify_chain(conn)
+        chain = audit.verify_chain(conn, expect_count=args.expect_count,
+                                   expect_head=args.expect_head)
         problems = verify_archive(conn)
+        count, head = audit.chain_head(conn)
+        pointer_rows = conn.execute(text("SELECT COUNT(*) FROM active_publication")).scalar()
     engine.dispose()
+    if pointer_rows != 1:
+        problems.append(("active_publication", f"expected exactly 1 pointer row, found "
+                                               f"{pointer_rows}"))
+    print(f"anchor: --expect-count {count} --expect-head {head}  (record this outside the DB)")
     print(f"audit chain ok={chain.ok} events={chain.events_checked}"
           + (f" first_bad={chain.first_bad_event_id} ({chain.problem})" if not chain.ok else ""))
     for doc, problem in problems:
@@ -120,10 +129,12 @@ def cmd_inventory_validate(args) -> int:
 
 
 def cmd_inventory_scan(args) -> int:
+    from riskparse.fswalk import check_output_location
     from riskparse.inventory.scan import scan_folder, write_scan_csv
+    check_output_location(args.out, args.root)        # refuse before reading anything
     rows, findings = scan_folder(args.root, inventoried_by=args.by or getpass.getuser(),
                                  inventoried_date=date.today().isoformat())
-    out = write_scan_csv(rows, args.out)
+    out = write_scan_csv(rows, args.out, scanned_root=args.root)
     print(f"{len(rows)} file(s) hashed -> {out}")
     for f in findings:
         print(f"{f.kind}: {f.detail}")
@@ -134,11 +145,26 @@ def cmd_intake_zip(args) -> int:
     from datetime import datetime
 
     from riskparse.evidence.intake_zip import (
+        ZipIntakeError,
         manifest_rows,
         register_intake,
         safe_extract,
         write_manifest,
     )
+    from riskparse.fswalk import check_output_location
+    # Validate every argument BEFORE extracting anything (Codex review #23).
+    check_output_location(args.manifest, args.extract_to)
+    received = None
+    if args.received_at:
+        try:
+            received = datetime.fromisoformat(args.received_at)
+        except ValueError as exc:
+            raise ZipIntakeError(f"--received-at is not an ISO timestamp: {exc}") from exc
+        if received.tzinfo is None or received.utcoffset() is None:
+            raise ZipIntakeError("--received-at must include a UTC offset, e.g. "
+                                 "2026-11-02T09:15-07:00")
+    if args.register:
+        _settings(args)      # configuration must be valid before extraction starts
     result = safe_extract(args.zip, args.extract_to)
     print(f"ZIP {result.zip_path} sha256={result.zip_sha256} size={result.zip_size_bytes}")
     print(f"extracted {len(result.members)} member(s) to {result.extract_dir}; "
@@ -150,7 +176,6 @@ def cmd_intake_zip(args) -> int:
     print("manifest:", write_manifest(rows, args.manifest))
     if args.register:
         from riskparse.db.connection import create_db_engine
-        received = datetime.fromisoformat(args.received_at) if args.received_at else None
         s = _settings(args)
         engine = create_db_engine(s)
         try:
@@ -176,8 +201,10 @@ def cmd_gen_data_dictionary(args) -> int:
 
 def cmd_profile_documents(args) -> int:
     from riskparse.extract.profile import format_summary, profile_folder, write_profile
+    from riskparse.fswalk import check_output_location
+    check_output_location(args.out, args.root)
     result = profile_folder(args.root)
-    out = write_profile(result, args.out)
+    out = write_profile(result, args.out, scanned_root=args.root)
     print(format_summary(result))
     print("profile:", out)
     return 0
@@ -234,13 +261,14 @@ def cmd_extract(args) -> int:
 
 
 def cmd_demo_smoke(args) -> int:
-    from riskparse.demo.smoke import run_smoke
-    summary = run_smoke(args.workdir)
+    from riskparse.demo import smoke
+    summary = smoke.run_smoke(args.workdir)
     print(json.dumps(summary, indent=2, default=str))
-    ok = (summary["audit_chain_ok"] and not summary["archive_problems"]
-          and summary["active_publication"] is None)
-    print("\nSMOKE DEMO:", "PASS" if ok else "FAIL")
-    return 0 if ok else 1
+    problems = smoke.check_summary(summary)
+    for p in problems:
+        print(f"MISMATCH: {p}")
+    print("\nSMOKE DEMO:", "FAIL" if problems else "PASS")
+    return 1 if problems else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -265,8 +293,11 @@ def build_parser() -> argparse.ArgumentParser:
     reg.add_argument("--no-archive", action="store_true")
     reg.set_defaults(func=cmd_register)
 
-    sub.add_parser("audit-verify", help="verify audit hash chain and archive hashes"
-                   ).set_defaults(func=cmd_audit_verify)
+    av = sub.add_parser("audit-verify", help="verify audit hash chain, evidence hashes and the "
+                                             "active-publication pointer")
+    av.add_argument("--expect-count", type=int, help="anchor from an earlier run: event count")
+    av.add_argument("--expect-head", help="anchor from an earlier run: head event hash")
+    av.set_defaults(func=cmd_audit_verify)
 
     it = sub.add_parser("inventory-template", help="write the blank source-inventory template")
     it.add_argument("--out", default="inventory/templates")
@@ -342,7 +373,8 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(exc, EvidenceIntegrityError):
             print(f"evidence check failed: {exc}", file=sys.stderr)
             return 5
-        if isinstance(exc, ZipIntakeError | FileExistsError):
+        from riskparse.fswalk import UnsafeOutputError
+        if isinstance(exc, ZipIntakeError | FileExistsError | UnsafeOutputError):
             print(f"intake refused: {exc}", file=sys.stderr)
             return 4
         raise

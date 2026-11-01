@@ -93,7 +93,9 @@ def extract_document(conn: Connection, document_id: str, *, actor: str,
             with fh:
                 fh.write(att.data)
             reg = register_document(conn, target, actor=actor, source_channel=ATTACHMENT_CHANNEL,
-                                    parent_document_id=document_id, archive_root=archive_root,
+                                    parent_document_id=document_id,
+                                    container_document_id=document_id,
+                                    archive_root=archive_root,
                                     observed_path=f"{doc['original_path']}!/{att.filename}")
             summary.attachments_registered.append((att.filename, reg.document_id, reg.outcome))
     audit.record(conn, actor=actor, action="DOCUMENT_TEXT_EXTRACTED", entity_type="source_document",

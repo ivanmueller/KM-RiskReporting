@@ -59,28 +59,55 @@ def register_document(
     archive_root: str | os.PathLike[str] | None = None,
     is_synthetic: bool = False,
     observed_path: str | None = None,
+    container_document_id: str | None = None,
 ) -> RegistrationResult:
-    """Register the file at ``path``. Must be called inside a transaction."""
+    """Register the file at ``path``. Must be called inside a transaction.
+
+    ``original_path`` always stores the real file location, so the bytes can be
+    re-verified later. ``observed_path`` (e.g. ``x.zip!/a.pdf``) and the container are
+    recorded on the observation, once per sighting, so a file seen in two archives keeps
+    both (Codex review).
+    """
     if category is not None and category not in vocab.DOCUMENT_CATEGORIES:
         raise ValueError(f"unknown document category {category!r}")
+    if received_at is not None and (received_at.tzinfo is None
+                                    or received_at.utcoffset() is None):
+        raise ValueError("received_at must be timezone-aware")
+    container = container_document_id or parent_document_id
     fp = fingerprint(path)
     now = datetime.now(UTC)
-    shown_path = observed_path or str(Path(path))
+    real_path = str(Path(path))
+    shown_path = observed_path or real_path
 
     existing = conn.execute(
-        select(source_documents.c.document_id, source_documents.c.archive_uri)
+        select(source_documents.c.document_id, source_documents.c.archive_uri,
+               source_documents.c.document_category)
         .where(source_documents.c.sha256 == fp.sha256)
     ).first()
     if existing is not None:
-        _observe(conn, existing.document_id, shown_path, fp.filename, now, fp.modified_at_utc)
+        _observe(conn, existing.document_id, shown_path, fp.filename, now, fp.modified_at_utc,
+                 container)
+        changes: dict = {}
+        archive_uri = existing.archive_uri
+        if archive_uri is None and archive_root is not None:
+            # A later request to keep an evidence copy must not be dropped (Codex #19).
+            archive_uri = str(archive.store(fp.path, archive_root, fp.sha256))
+            changes["archive_uri"] = archive_uri
+        if existing.document_category is None and category is not None:
+            changes["document_category"] = category
+        if changes:
+            conn.execute(source_documents.update()
+                         .where(source_documents.c.document_id == existing.document_id)
+                         .values(**changes))
         audit.record(
             conn, actor=actor, action="DOCUMENT_DUPLICATE_OBSERVED",
             entity_type="source_document", entity_id=existing.document_id,
             document_id=existing.document_id,
-            after={"observed_path": shown_path, "sha256": fp.sha256},
+            after={"observed_path": shown_path, "sha256": fp.sha256,
+                   "container_document_id": container, **changes},
         )
         return RegistrationResult(DUPLICATE, existing.document_id, fp.sha256,
-                                  archive_uri=existing.archive_uri)
+                                  archive_uri=archive_uri)
 
     prior = conn.execute(
         select(source_documents.c.document_id)
@@ -102,7 +129,7 @@ def register_document(
         file_type=fp.file_type,
         document_category=category,
         original_filename=fp.filename,
-        original_path=shown_path,
+        original_path=real_path,
         archive_uri=archive_uri,
         source_channel=source_channel,
         sender=sender,
@@ -114,7 +141,7 @@ def register_document(
         revision_of_document_id=prior,
         is_synthetic=is_synthetic,
     ))
-    _observe(conn, document_id, shown_path, fp.filename, now, fp.modified_at_utc)
+    _observe(conn, document_id, shown_path, fp.filename, now, fp.modified_at_utc, container)
 
     outcome = REVISION if prior else NEW
     audit.record(
@@ -131,30 +158,46 @@ def register_document(
 
 
 def _observe(conn: Connection, document_id: str, path: str, filename: str,
-             observed_at: datetime, modified_at: datetime) -> None:
+             observed_at: datetime, modified_at: datetime,
+             container_document_id: str | None = None) -> None:
     conn.execute(insert(document_observations).values(
         document_id=document_id, observed_path=path, observed_filename=filename,
         observed_at_utc=observed_at, file_modified_at_utc=modified_at,
+        container_document_id=container_document_id,
     ))
 
 
 def verify_archive(conn: Connection) -> list[tuple[str, str]]:
-    """Re-hash every archived document. Returns ``(document_id, problem)`` failures."""
+    """Re-hash the retained copy of every registered document.
+
+    The archive copy is checked when there is one; otherwise the original file. A
+    document with neither a readable archive copy nor a readable, matching original has
+    lost its evidence, and is reported (Codex review #19). Returns ``(document_id,
+    problem)`` failures.
+    """
+    import hashlib
     problems: list[tuple[str, str]] = []
-    rows = conn.execute(
-        select(source_documents.c.document_id, source_documents.c.sha256,
-               source_documents.c.archive_uri)
-        .where(source_documents.c.archive_uri.is_not(None))
-    )
+    rows = conn.execute(select(source_documents.c.document_id, source_documents.c.sha256,
+                               source_documents.c.archive_uri,
+                               source_documents.c.original_path))
     for r in rows:
-        p = Path(r.archive_uri)
-        if not p.is_file():
-            problems.append((r.document_id, "archive object missing"))
+        if r.archive_uri:
+            p = Path(r.archive_uri)
+            if not p.is_file():
+                problems.append((r.document_id, "archive object missing"))
+                continue
+            try:
+                archive.verify(p, r.sha256)
+            except archive.ArchiveIntegrityError as exc:
+                problems.append((r.document_id, str(exc)))
             continue
-        try:
-            archive.verify(p, r.sha256)
-        except archive.ArchiveIntegrityError as exc:
-            problems.append((r.document_id, str(exc)))
+        p = Path(r.original_path)
+        if not p.is_file():
+            problems.append((r.document_id, "no archive copy and the original file is missing; "
+                                            "the evidence is not retained"))
+            continue
+        if hashlib.sha256(p.read_bytes()).hexdigest() != r.sha256:
+            problems.append((r.document_id, "no archive copy and the original file has changed"))
     return problems
 
 

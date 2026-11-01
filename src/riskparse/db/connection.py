@@ -21,7 +21,7 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.engine import URL
 
-from riskparse.config import ConfigError, Settings
+from riskparse.config import ConfigError, Settings, validate
 
 
 class ConnectionNotAuthorized(ConfigError):
@@ -29,7 +29,12 @@ class ConnectionNotAuthorized(ConfigError):
 
 
 def build_url(settings: Settings) -> URL:
-    """Return the SQLAlchemy URL for ``settings`` without connecting."""
+    """Return the SQLAlchemy URL for ``settings`` without connecting.
+
+    Settings are re-validated here because callers can construct ``Settings`` directly,
+    bypassing the TOML loader; this is the public connection boundary.
+    """
+    validate(settings)
     db = settings.database
     if db.backend == "sqlite":
         if db.sqlite_path == ":memory:":

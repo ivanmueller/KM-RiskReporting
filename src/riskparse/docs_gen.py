@@ -15,7 +15,8 @@ PURPOSE = {
     "bytes = new row with `revision_of_document_id`. Members of a received ZIP point at the "
     "ZIP through `parent_document_id`.",
     "document_observations": "Every place/time/filename a document's bytes were seen "
-    "(duplicates keep all observed names and paths).",
+    "(duplicates keep all observed names and paths), with the archive or email it was found "
+    "in (`container_document_id`).",
     "trades": "One economic deal with internal `trade_uid`. Egistix, counterparty and trader "
     "references live in `trade_aliases`, never as the key.",
     "trade_aliases": "Many-to-one source references for a trade, unique per alias system.",
@@ -27,7 +28,8 @@ PURPOSE = {
     "MISSING/PENDING/NOT_APPLICABLE/UNRESOLVED (value must be NULL).",
     "source_imports": "One import of a registered Egistix export or trader sheet with its "
     "cutoff; idempotent per (document, source system, parser version). Bytes are re-hashed "
-    "against the registered SHA-256 before parsing.",
+    "against the registered SHA-256 before parsing. `unparsed_json` keeps every field that "
+    "could not be parsed or stored exactly, so a retry still reports it.",
     "source_records": "One unchanged raw row (JSON + hash) from an import, with optional "
     "normalized fields and a link to a trade once matched.",
     "reconciliation_runs": "One reconciliation execution with code and rules versions.",
