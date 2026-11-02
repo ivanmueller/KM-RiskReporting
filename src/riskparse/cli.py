@@ -263,6 +263,16 @@ def cmd_extract(args) -> int:
     return 0
 
 
+def cmd_review(args) -> int:
+    from riskparse.review import build_review, format_summary
+    result = build_review(args.source, args.out)
+    print(format_summary(result))
+    print(f"\nOpen this workbook: {result.workbook}")
+    print("Share only the summary above (counts and layout groups). The workbook is "
+          "confidential.")
+    return 0
+
+
 def cmd_demo_smoke(args) -> int:
     from riskparse.demo import smoke
     summary = smoke.run_smoke(args.workdir)
@@ -332,6 +342,12 @@ def build_parser() -> argparse.ArgumentParser:
                                           "2026-11-02T09:15-07:00")
     iz.set_defaults(func=cmd_intake_zip)
 
+    rv = sub.add_parser("review", help="STEP 1: one Excel workbook listing every document in a "
+                                       "ZIP or folder, with its readable text (no setup, no DB)")
+    rv.add_argument("source", help="the contracts ZIP file, or a folder")
+    rv.add_argument("--out", help="new output folder (default: next to the source, timestamped)")
+    rv.set_defaults(func=cmd_review)
+
     pf = sub.add_parser("profile-documents", help="count and size contract documents by "
                                                   "folder/format/status (no DB)")
     pf.add_argument("--root", required=True)
@@ -377,7 +393,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"evidence check failed: {exc}", file=sys.stderr)
             return 5
         from riskparse.fswalk import UnsafeOutputError
-        if isinstance(exc, ZipIntakeError | FileExistsError | UnsafeOutputError):
+        from riskparse.review import ReviewError
+        if isinstance(exc, ZipIntakeError | FileExistsError | UnsafeOutputError | ReviewError):
             print(f"intake refused: {exc}", file=sys.stderr)
             return 4
         raise

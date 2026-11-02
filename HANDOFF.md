@@ -40,6 +40,11 @@ riskparse demo-smoke --workdir var/demo
 Windows/PowerShell equivalents are in `README.md`. Expected result: `334 passed` (the
 repository-hygiene tests skip outside a git checkout), and the demo ends with `SMOKE DEMO: PASS`.
 
+> **Step 1 entry point:** `riskparse review <zip or folder>` (`src/riskparse/review.py`,
+> `docs/STEP1_QUICKSTART.md`) builds one Excel workbook (Summary / Documents / Text / Issues),
+> with no config or database. The registration, database and audit pieces below are groundwork
+> for later stages; they are not required to run step 1.
+
 ## 3. Code map and responsibilities
 
 | Module | Responsibility | Notes for maintainers |

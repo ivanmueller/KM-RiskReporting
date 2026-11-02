@@ -1,4 +1,8 @@
-# Running riskparse on the October contracts — step by step (Windows)
+# Running riskparse on the October contracts — full controlled workflow (Windows)
+
+> **Not needed for step 1.** To review the contracts, use the one-command
+> [`STEP1_QUICKSTART.md`](STEP1_QUICKSTART.md). This page is the full evidence workflow
+> (registration, database, audit trail) for later stages.
 
 **What this does:** it records the received contracts ZIP as evidence, extracts it safely, counts
 and sizes the document population, and pulls the raw text out of every `.pdf`, `.xlsx` and `.msg`

@@ -11,6 +11,12 @@ See [`HANDOFF.md`](HANDOFF.md) (start here), [`ROADMAP.md`](ROADMAP.md) (task/st
 [`docs/blockers.md`](docs/blockers.md) and the review prompt
 [`docs/review/codex_stress_test_prompt.md`](docs/review/codex_stress_test_prompt.md).
 
+
+> **Step 1 (reviewing the October contracts) needs one command.** See
+> [`docs/STEP1_QUICKSTART.md`](docs/STEP1_QUICKSTART.md):
+> `riskparse review "<contracts ZIP or folder>"` produces one Excel workbook (documents, text,
+> issues). It needs no settings file and no database.
+
 ## Ground rules
 
 - **No confidential material in Git** — contracts, emails, Egistix exports, trader sheets,

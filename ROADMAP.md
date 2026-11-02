@@ -17,7 +17,7 @@ for a gate that needs real data or sign-off.
 - **Stage 1, Phase 1 (foundation):** done.
 - **Week 1 discovery:** in progress. The October trade zip has been received and needs to be inventoried.
 - **Engineering:** B1–B8 are done. The first Codex review's 26 findings are fixed, with migration `0004`; see `HANDOFF.md` §10 (334 tests). Contract **text extraction** (`.pdf`, `.xlsx`, `.msg` with attachments), `profile-documents` and layout fingerprints are built. Next: a second Codex review at `HEAD` (B9).
-- **Your next step:** run `docs/contract_extraction.md` steps 1–4 on the October zip and send back the profile **summary** (counts only). It decides which counterparty layouts get a parser first.
+- **Your next step:** run `riskparse review` on the October ZIP (`docs/STEP1_QUICKSTART.md`) and send back the printed **summary** (counts only). It decides which counterparty layouts get a parser first. The full controlled workflow (`docs/contract_extraction.md`) is not needed for this.
 
 ## NOW — next actions (in order)
 
