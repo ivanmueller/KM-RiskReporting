@@ -37,7 +37,7 @@ ruff check src tests
 riskparse demo-smoke --workdir var/demo
 ```
 
-Windows/PowerShell equivalents are in `README.md`. Expected result: `380 passed` (the
+Windows/PowerShell equivalents are in `README.md`. Expected result: `381 passed` (the
 repository-hygiene tests skip outside a git checkout), and the demo ends with `SMOKE DEMO: PASS`.
 
 > **Step 1 entry point:** `riskparse review <zip or folder> --format raw-data-format.xlsx`

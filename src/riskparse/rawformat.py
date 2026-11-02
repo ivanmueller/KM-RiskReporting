@@ -19,7 +19,7 @@ from openpyxl import load_workbook
 
 DEFAULT_HEADERS = ["Contract #", "Trade Date", "Start Date", "End Date", "Term", "Trader",
                    "Counterparty", "Seller", "Quantity", "Unit", "Grade", "Primary Index",
-                   "Secondary Index", "Fixed Differential", "Fixed Price"]
+                   "Secondary Index", "Fixed Differential", "Fixed Price", "Currency"]
 
 # format header (normalized) -> Trade attribute
 HEADER_ATTR = {
@@ -31,7 +31,10 @@ HEADER_ATTR = {
     "unit": "unit", "grade": "grade", "product": "grade", "primary index": "primary_index",
     "index": "primary_index", "secondary index": "secondary_index",
     "fixed differential": "fixed_differential", "differential": "fixed_differential",
-    "fixed price": "fixed_price", "flat price": "fixed_price", "currency": "currency",
+    "fixed price": "fixed_price", "flat price": "fixed_price",
+    # "Currency" is the currency the price is quoted in (a -6.10 differential in USD/bbl stays
+    # USD even when the trade settles in CAD); "Settlement Currency" is the payment currency.
+    "currency": "price_currency", "price currency": "price_currency",
     "settlement currency": "currency", "location": "location", "broker": "broker",
 }
 

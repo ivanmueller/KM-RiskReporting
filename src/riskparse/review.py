@@ -114,7 +114,7 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     if not src.exists():
         raise ReviewError(f"{src} does not exist")
     headers = read_format_headers(format_path) if format_path else list(DEFAULT_HEADERS)
-    headers, added = _with_fixed_price(headers)
+    headers, added = _with_price_columns(headers)
     nmap = None
     if use_names:
         if names_path is not None:
@@ -180,27 +180,29 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     return result
 
 
-def _with_fixed_price(headers: list[str]) -> tuple[list[str], list[str]]:
-    """A format with a Fixed Differential column always gets a Fixed Price column right
-    after it, so a swap's flat price is never lost or put in the differential."""
-    attrs = [attr_for(h) for h in headers]
-    if "fixed_price" in attrs or "fixed_differential" not in attrs:
-        return headers, []
-    i = attrs.index("fixed_differential") + 1
-    return headers[:i] + ["Fixed Price"] + headers[i:], ["Fixed Price"]
+# columns every output gets, if the format file has the price columns but not these
+_PRICE_COLUMNS = (("Fixed Price", "fixed_price", "fixed_differential"),
+                  ("Currency", "price_currency", "fixed_price"))
+
+
+def _with_price_columns(headers: list[str]) -> tuple[list[str], list[str]]:
+    """A format with Fixed Differential always gets Fixed Price right after it, then
+    Currency, so a swap's flat price is never lost and every price has its currency."""
+    headers, added = list(headers), []
+    for header, attr, after in _PRICE_COLUMNS:
+        attrs = [attr_for(h) for h in headers]
+        if attr in attrs or after not in attrs:
+            continue
+        headers.insert(attrs.index(after) + 1, header)
+        added.append(header)
+    return headers, added
 
 
 def _price_flags(result: ReviewResult) -> None:
     for t in result.trades:
-        if t.fixed_price is None:
-            continue
-        if t.price_unit and not t.price_unit.upper().startswith("USD"):
-            t.flags.append(f"price in {t.price_unit}: fixed price {_num(t.fixed_price)} is "
-                           "not in USD")
-
-
-def _num(v) -> str:
-    return format(v.normalize(), "f") if hasattr(v, "normalize") else str(v)
+        if (t.fixed_price is not None or t.fixed_differential is not None) \
+                and not t.price_currency:
+            t.flags.append("price currency not stated on the confirmation: Currency left blank")
 
 
 def _add(result: ReviewResult, text_rows: list, doc_no: str, folder: str, name: str,
@@ -315,7 +317,7 @@ def _write_review(result: ReviewResult, text_rows: list, src: Path) -> None:
 
 
 _FLAG_KINDS = (("swap: no trader", "swap: no trader named on the confirmation"),
-               ("price in", "price not quoted in USD"),
+               ("price currency", "price currency not stated"),
                ("flat price", "flat price with no index (put in Fixed Price)"),
                ("AMENDED", "amendment applied (earlier version superseded)"),
                ("also in", "duplicate document merged into one trade"),

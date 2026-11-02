@@ -74,9 +74,15 @@ Column conventions:
 - **Fixed Differential** is the price differential to the index (physical trades priced as
   index + differential, e.g. WTI CMA -6.10).
 - **Fixed Price** is a flat (outright) price: a swap's fixed price, or a physical price on a
-  confirmation that names no index. A row has one or the other, never both. A price not
-  quoted in USD is flagged (one October swap is CAD/bbl); see "Price quoted in" on the checks
-  sheet. If your format file has no Fixed Price column, the tool adds one right after Fixed
+  confirmation that names no index. A row has one or the other, never both.
+- **Currency** is the currency the price is **quoted** in, so you know what the Fixed
+  Differential or Fixed Price number means. It is not always the settlement currency: a WTI
+  CMA differential of -6.10 is USD/bbl even when the trade settles in CAD (14 October trades
+  do). Modern Commodities reports state only the settlement currency, so their WTI CMA
+  differentials are taken as USD/bbl by market convention (the evidence sheet says so). The
+  settlement currency is on the checks sheet; add a `Settlement Currency` column to your
+  format file if you want it in raw-data too.
+- If your format file has no Fixed Price or Currency column, the tool adds them after Fixed
   Differential and says so in the summary.
 
 - A swap's **Contract #** is the transaction number: the second number of the bank's reference

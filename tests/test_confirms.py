@@ -196,3 +196,14 @@ def test_price_with_no_index_is_a_flat_price_not_a_differential():
     assert f.fixed_price == Decimal("72.5") and f.fixed_differential is None
     _, [d] = _parse(modern_xlsx(price=-8.75), "XLSX")              # index: a differential
     assert (d.fixed_differential, d.fixed_price) == (Decimal("-8.75"), None)
+
+
+def test_price_currency_is_the_quote_currency_not_the_settlement_currency():
+    _, [m] = _parse(modern_xlsx(currency="CAD"), "XLSX")
+    assert (m.currency, m.price_unit, m.price_currency) == ("CAD", "USD/bbl", "USD")
+    assert "market convention" in m.evidence["price_currency"]
+    _, [o] = _parse(ox_pdf(), "PDF")
+    assert (o.currency, o.price_currency) == ("CAD", "USD")
+    assert o.evidence["price_currency"].endswith("quoted in USD/bbl")
+    _, [x] = _parse(modern_xlsx(basis="SYN Local Index"), "XLSX")   # not WTI: not assumed
+    assert x.price_currency == ""

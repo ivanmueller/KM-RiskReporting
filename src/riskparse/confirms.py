@@ -82,6 +82,11 @@ class Trade:
     documents: list[str] = field(default_factory=list)       # all supporting documents
     names_as_written: dict[str, str] = field(default_factory=dict)  # before the name map
 
+    @property
+    def price_currency(self) -> str:
+        """The currency the price (differential or fixed price) is quoted in: "USD/bbl" -> USD."""
+        return self.price_unit.split("/")[0].strip().upper() if self.price_unit else ""
+
 
 # --------------------------------------------------------------------------- helpers
 
@@ -251,6 +256,13 @@ def parse_modern_xlsx(result, doc, name, us) -> list[Trade]:
                 _set(t, attr, clean(v), loc, v)
             v, loc = get("Price")
             _set(t, "fixed_differential", parse_number(v), loc, v)
+            if re.search(r"\bWTI\b", t.primary_index, re.I):
+                # The report gives only the settlement currency. WTI CMA differentials are
+                # quoted in USD/bbl (the same price appears on USD- and CAD-settled trades).
+                t.price_unit = "USD/bbl"
+                t.evidence["price_currency"] = (f"{loc}: '{clean(v)}' with Price Basis "
+                                                f"'{t.primary_index}': a WTI differential, "
+                                                "quoted in USD/bbl by market convention")
             (bid, lb), (off, lo) = get("Bid Legal Name"), get("Offer Legal Name")
             (bt, _), (ot, _) = get("Bid Trader"), get("Offer Trader")
             _assign_parties(t, bid or "", off or "", bt or "", ot or "", us, lb, lo)
@@ -517,7 +529,7 @@ PARSERS = {"modern": parse_modern_xlsx, "ox": parse_ox_pdf, "marex_pdf": parse_m
 _SAME_TRADE_GROUP = {"Marex (PDF)": "marex", "Marex (daily summary xls)": "marex"}
 _PREFERENCE = {"Marex (PDF)": 0, "Marex (daily summary xls)": 1}
 _COMPARED = ("trade_date", "start_date", "end_date", "side", "quantity", "unit", "grade",
-             "primary_index", "fixed_differential", "fixed_price", "currency")
+             "primary_index", "fixed_differential", "fixed_price", "price_unit", "currency")
 REQUIRED = ("contract_no", "trade_date", "start_date", "end_date", "counterparty", "seller",
             "side", "quantity", "unit", "primary_index", "currency")
 
@@ -530,6 +542,10 @@ def parse_document(result, file_type, doc, name, us=DEFAULT_US) -> tuple[str | N
     for t in trades:
         t.documents.append(f"{doc} {name}")
         _flat_price_check(t)
+        if t.price_currency and "price_currency" not in t.evidence:
+            price_ev = t.evidence.get("fixed_price") or t.evidence.get("fixed_differential")
+            if price_ev:
+                t.evidence["price_currency"] = f"{price_ev}  -> quoted in {t.price_unit}"
     return fam, trades
 
 
