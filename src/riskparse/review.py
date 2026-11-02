@@ -68,6 +68,7 @@ class ReviewResult:
     trades: list[Trade] = field(default_factory=list)                 # one per trade
     format_headers: list[str] = field(default_factory=list)
     format_unmapped: list[str] = field(default_factory=list)
+    format_added: list[str] = field(default_factory=list)   # columns the tool added
     name_map: NameMap | None = None
     names: list[list] = field(default_factory=list)      # names sheet rows
 
@@ -113,6 +114,7 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     if not src.exists():
         raise ReviewError(f"{src} does not exist")
     headers = read_format_headers(format_path) if format_path else list(DEFAULT_HEADERS)
+    headers, added = _with_fixed_price(headers)
     nmap = None
     if use_names:
         if names_path is not None:
@@ -125,7 +127,8 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     out.mkdir(parents=True)
     result = ReviewResult(out, out / "review.xlsx", out / "raw-data.xlsx",
                           format_headers=headers,
-                          format_unmapped=[h for h in headers if attr_for(h) is None])
+                          format_unmapped=[h for h in headers if attr_for(h) is None],
+                          format_added=added)
     result.name_map = nmap
     us_names = tuple(us) if us else DEFAULT_US
 
@@ -177,14 +180,20 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     return result
 
 
+def _with_fixed_price(headers: list[str]) -> tuple[list[str], list[str]]:
+    """A format with a Fixed Differential column always gets a Fixed Price column right
+    after it, so a swap's flat price is never lost or put in the differential."""
+    attrs = [attr_for(h) for h in headers]
+    if "fixed_price" in attrs or "fixed_differential" not in attrs:
+        return headers, []
+    i = attrs.index("fixed_differential") + 1
+    return headers[:i] + ["Fixed Price"] + headers[i:], ["Fixed Price"]
+
+
 def _price_flags(result: ReviewResult) -> None:
-    has_fixed = any(attr_for(h) == "fixed_price" for h in result.format_headers)
     for t in result.trades:
         if t.fixed_price is None:
             continue
-        if not has_fixed:
-            t.flags.append(f"fixed price {_num(t.fixed_price)} is on the checks sheet only: the "
-                           "format has no Fixed Price column")
         if t.price_unit and not t.price_unit.upper().startswith("USD"):
             t.flags.append(f"price in {t.price_unit}: fixed price {_num(t.fixed_price)} is "
                            "not in USD")
@@ -306,7 +315,6 @@ def _write_review(result: ReviewResult, text_rows: list, src: Path) -> None:
 
 
 _FLAG_KINDS = (("swap: no trader", "swap: no trader named on the confirmation"),
-               ("fixed price", "fixed price on checks sheet only (no Fixed Price column)"),
                ("price in", "price not quoted in USD"),
                ("flat price", "flat price with no index (put in Fixed Price)"),
                ("AMENDED", "amendment applied (earlier version superseded)"),
@@ -352,6 +360,7 @@ def format_summary(result: ReviewResult) -> str:
     for h in result.format_headers:
         a = attr_for(h)
         filled = sum(1 for t in result.trades if a and cell_value(t, a) is not None)
-        mark = "  [header not recognised]" if a is None else ""
+        mark = ("  [header not recognised]" if a is None else
+                "  [added: not in your format file]" if h in result.format_added else "")
         lines.append(f"  {h.strip():<20} {filled:>3}{mark}")
     return "\n".join(lines)

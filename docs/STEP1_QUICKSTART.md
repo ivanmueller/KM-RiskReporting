@@ -76,8 +76,8 @@ Column conventions:
 - **Fixed Price** is a flat (outright) price: a swap's fixed price, or a physical price on a
   confirmation that names no index. A row has one or the other, never both. A price not
   quoted in USD is flagged (one October swap is CAD/bbl); see "Price quoted in" on the checks
-  sheet. If your format file has no Fixed Price column, the price stays on the checks sheet
-  and the row is flagged.
+  sheet. If your format file has no Fixed Price column, the tool adds one right after Fixed
+  Differential and says so in the summary.
 
 - A swap's **Contract #** is the transaction number: the second number of the bank's reference
   ("167034481 / 181749496" gives 181749496). The full reference stays on the evidence sheet.
