@@ -50,6 +50,9 @@
 !inventory/templates/inventory_Open_Questions.csv
 
 # Completed inventories and any real source data
+/Contracts/
+/contracts/
+*_review_*/
 inventory/completed/
 data/
 source_data/
