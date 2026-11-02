@@ -96,6 +96,8 @@ def _put(ws, row: int, values: list) -> None:
 
 
 REVIEW_ROOT = "contracts-review"
+# Bump with every change to the output, so a printed summary shows which code produced it.
+REVIEW_BUILD = "2026-11-02c (adds Fixed Price + Currency columns)"
 
 
 def default_out_dir(src: Path, now: datetime | None = None) -> Path:
@@ -335,7 +337,8 @@ def flag_kind(flag: str) -> str:
 
 def format_summary(result: ReviewResult) -> str:
     """Counts only (no names, prices or text): safe to share."""
-    lines = [f"{'folder':<12} {'type':<6} {'status':<15} docs", "-" * 40]
+    lines = [f"riskparse review build {REVIEW_BUILD}", "",
+             f"{'folder':<12} {'type':<6} {'status':<15} docs", "-" * 40]
     for (fclass, ftype, status), count in sorted(result.counts().items()):
         lines.append(f"{fclass:<12} {ftype:<6} {status:<15} {count}")
     unrec = [d for d in result.documents if d["parsed_as"] == "UNRECOGNISED"]
@@ -354,6 +357,7 @@ def format_summary(result: ReviewResult) -> str:
         missing = sum(1 for r in result.names if r[2] == "NOT IN MAP")
         lines.append(f"Counterparty map: {len(result.names) - missing} spelling(s) mapped, "
                      f"{missing} not in the map (see the names sheet)")
+        lines.append(f"  map file: {result.name_map.path.resolve()}")
     lines.append(f"Trades with something to look at: {len(attention)} (see the checks sheet)")
     kinds = Counter(flag_kind(f) for t in result.trades for f in t.flags)
     for kind, n in kinds.most_common(8):
