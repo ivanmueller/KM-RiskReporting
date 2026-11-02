@@ -14,26 +14,31 @@ beforehand:
    from anywhere else (for example Downloads), it asks where to install: press Enter for
    `C:\RiskCode\KM-RiskReporting` or type another folder, then confirm with Y. Next time it
    suggests the folder you chose. The folder must be on this computer: a network drive
-   (such as L:) is refused, because building the environment there is very slow or hangs;
+   (such as L:) is refused, because building the environment there is very slow or hangs.
+   It then asks where the **contracts** are. This can be on the network, for example
+   `L:\Credit\Private\MTM\Risk Directory\Contracts`. The results go to a
+   `contracts-data` folder next to it. On later runs it shows the folder and asks Y to keep
+   it or N to choose another. That is the last question: the rest runs by itself;
 2. uses Git if installed, otherwise downloads a private copy for your user;
 3. downloads the latest version of the program;
 4. uses Python 3.11 – 3.13 if installed, otherwise installs Python for your user only
    (the installer's signature is checked first);
 5. creates the program environment (`.venv`) and installs the packages;
-6. creates the `contracts` folder and checks that the program starts.
+6. checks that the program starts.
 
 **Run `SETUP.bat` again whenever you want the latest version.** It is safe to repeat.
 
 ## Each time: run it
 
-1. Put the confirmations in **`contracts`**: the `Physical Contracts`, `Financial Contracts`
-   and `Evergreen Contracts` folders, as they are.
-2. Double-click **`RUN.bat`**.
+1. Put the confirmations in the contracts folder you chose in SETUP: the
+   `Physical Contracts`, `Financial Contracts` and `Evergreen Contracts` folders, as they are.
+2. Double-click **`RUN.bat`** in the program folder.
 
-The window prints a summary, and the new results folder opens:
-`contracts-data\contracts_<date>_<time>\` with `raw-data.xlsx` and `review.xlsx`. Earlier
-runs are kept, never overwritten. Nothing in `contracts` is changed, and neither folder is ever
-committed to git.
+The window prints a summary, and the new results folder opens: `contracts-data\<contracts
+folder name>_<date>_<time>\`, next to the contracts folder, with `raw-data.xlsx` and
+`review.xlsx`. Earlier runs are kept, never overwritten. Nothing in the contracts folder is
+changed. To use another contracts folder, run `SETUP.bat` again and press N at the contracts
+question.
 
 - The output columns come from **`config\raw-data-format.xlsx`**: its first-row headers, in
   order. Edit the headers there to change the columns. Fixed Price and Currency are added if a
@@ -139,6 +144,7 @@ Brokers spell the same company in different ways ("Secure" vs "SECURE", "Inc" vs
 | SETUP stops at Git, Python or packages | The computer is blocking a download (github.com, python.org or pypi.org). The message names it; ask IT to allow it, or to install Python 3.13 and Git for Windows, then run `SETUP.bat` again. |
 | SETUP sits at "[5/6] creating the program environment" for 15+ minutes | It was installed on a network drive. Close it, end `python.exe` in Task Manager, delete that folder, and run `SETUP.bat` again with a folder on C:. |
 | "The program is not set up yet" | Run `SETUP.bat` first. |
+| "The contracts folder cannot be reached" | It is on L: and the network is not connected (VPN?). Connect and run again. |
 | A column you expected is missing | Check the summary: its first line names the build, and the `Format:` line names the format file used. Run `SETUP.bat` to update. |
 | A company is `NOT IN MAP` | Add it to `config\counterparty_map.csv` and run again. |
 

@@ -13,8 +13,11 @@ rem    Python  -> %LOCALAPPDATA%\KM-RiskReporting\python
 rem               (only if Python 3.11 - 3.13 is not already installed)
 rem    Git     -> %LOCALAPPDATA%\KM-RiskReporting\git
 rem               (only if Git is not already installed)
-rem    Program -> the folder you choose (default C:\RiskCode\KM-RiskReporting);
-rem               run from inside a copy, it updates that copy without asking
+rem    Program -> the folder you choose on this computer (default
+rem               C:\RiskCode\KM-RiskReporting); run from inside a copy, it updates
+rem               that copy without asking for the program folder
+rem    Contracts -> the folder you choose, which can be on a network drive (L:);
+rem               the results go to "contracts-data" next to it
 rem ======================================================================
 
 set "REPO_URL=https://github.com/ivanmueller/KM-RiskReporting.git"
@@ -45,7 +48,7 @@ if not exist "%TOOLS%" mkdir "%TOOLS%"
 if not exist "%DL%" mkdir "%DL%"
 
 rem ---------------------------------------------------------------- 1
-echo [1/6] Program folder
+echo [1/6] Folders
 rem Run from inside an existing copy: update that copy, no question asked.
 set "APP=%HERE%"
 if exist "%APP%\.git\" if exist "%APP%\pyproject.toml" goto :app_dir_known
@@ -89,10 +92,56 @@ goto :ask_app_dir
 echo.
 echo       %APP% is on a network drive. The program has to be installed on this
 echo       computer, for example C:\RiskCode\KM-RiskReporting - choose a folder on C:.
+echo       The contracts and results can still be on the network drive: the next
+echo       question asks where the contracts are.
 set "DEFAULT_APP=%INSTALL_DIR%"
 goto :ask_app_dir
 :app_dir_known
 echo       %APP%
+
+rem Where the contracts are (may be a network drive such as L:). RUN.bat reads them from
+rem there and writes the results to a "contracts-data" folder next to them.
+set "CONTRACTS="
+if exist "%TOOLS%\contracts-folder.txt" set /p CONTRACTS=<"%TOOLS%\contracts-folder.txt"
+if not defined CONTRACTS goto :ask_contracts
+echo.
+echo       Contracts folder: %CONTRACTS%
+choice /c YN /n /m "      Keep it? Press Y to keep it or N to choose another: "
+if errorlevel 2 goto :ask_contracts
+goto :contracts_known
+:ask_contracts
+set "DEFAULT_CONTRACTS=%APP%\contracts"
+if defined CONTRACTS set "DEFAULT_CONTRACTS=%CONTRACTS%"
+echo.
+echo       Where are the contracts? RUN.bat reads every confirmation in this folder
+echo       and puts the results in a "contracts-data" folder next to it.
+echo       Press Enter for: %DEFAULT_CONTRACTS%
+echo       or type or paste another folder, for example L:\Risk\Contracts
+set "ANSWER=%DEFAULT_CONTRACTS%"
+set /p "ANSWER=      Contracts folder: "
+set "ANSWER=%ANSWER:"=%"
+if "%ANSWER%"=="" set "ANSWER=%DEFAULT_CONTRACTS%"
+for %%I in ("%ANSWER%") do set "CONTRACTS=%%~fI"
+if "%CONTRACTS:~-1%"=="\" set "CONTRACTS=%CONTRACTS:~0,-1%"
+for %%I in ("%CONTRACTS%\..") do set "RESULTS=%%~fI"
+if "%RESULTS:~-1%"=="\" set "RESULTS=%RESULTS:~0,-1%"
+echo.
+echo       Contracts: %CONTRACTS%
+echo       Results:   %RESULTS%\contracts-data
+choice /c YN /n /m "      Is that right? Press Y for yes or N to choose again: "
+if errorlevel 2 goto :ask_contracts
+if exist "%CONTRACTS%\" goto :save_contracts
+mkdir "%CONTRACTS%" 2>nul
+if exist "%CONTRACTS%\" goto :save_contracts
+echo       That folder cannot be reached or created - if it is on L:, check the network
+echo       connection - or choose another one.
+goto :ask_contracts
+:save_contracts
+> "%TOOLS%\contracts-folder.txt" echo %CONTRACTS%
+:contracts_known
+echo.
+echo       That is all the questions. The rest runs by itself.
+echo.
 
 rem ---------------------------------------------------------------- 2
 echo [2/6] Git
@@ -177,7 +226,6 @@ if errorlevel 1 goto :fail_pip
 rem ---------------------------------------------------------------- 6
 echo [6/6] Final check
 > "%TOOLS%\install-path.txt" echo %APP%
-if not exist "%APP%\contracts\" mkdir "%APP%\contracts"
 "%APP%\.venv\Scripts\riskparse.exe" review --help >nul 2>&1
 if errorlevel 1 goto :fail_check
 echo       the program starts correctly
@@ -190,8 +238,9 @@ echo   Setup finished.
 echo.
 echo   Program folder: %APP%
 echo.
-echo   1. Put the confirmations in the "contracts" folder.
-echo   2. Double-click RUN.bat.
+echo   1. Put the confirmations in: %CONTRACTS%
+echo   2. Double-click RUN.bat in the program folder.
+echo      The results go to the "contracts-data" folder next to the contracts.
 echo.
 echo   Run SETUP.bat again at any time to get the latest version.
 echo  ======================================================================

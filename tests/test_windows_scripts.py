@@ -39,7 +39,7 @@ def test_scripts_point_at_files_that_exist():
     assert "requirements\\lock.txt" in setup and (REPO / "requirements" / "lock.txt").is_file()
     assert "github.com/ivanmueller/KM-RiskReporting.git" in setup
     run = (REPO / "RUN.bat").read_text()
-    assert "riskparse.exe\" review contracts" in run
+    assert "riskparse.exe\" review \"%CONTRACTS%\"" in run
 
 
 def test_gitattributes_keeps_bat_bytes():
