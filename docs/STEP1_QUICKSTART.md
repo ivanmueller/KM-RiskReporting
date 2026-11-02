@@ -27,6 +27,25 @@ It prints a short summary and the path of `review.xlsx`. The workbook goes in a 
 `Risk Program_review_<date-time>` folder next to the ZIP; add `--out C:\RiskWork\review1` to
 put it somewhere else. The ZIP itself is never changed.
 
+## Output in the firm's raw-data-format
+
+Point the review at the firm's format file, and give our company name as it appears on
+confirmations:
+
+```powershell
+.\.venv\Scripts\riskparse review contracts --format raw-data-format.xlsx --us "<our company name>"
+```
+
+- `raw-data.xlsx` (in the output folder): **only** the firm's format, with the same headers as
+  `raw-data-format.xlsx` and one row per document. Values are copied as written. These are
+  proposals: verify them before pasting into the library.
+- In `review.xlsx`, the `raw-data-evidence` sheet shows, for every filled cell, the exact
+  location in the source document and any other candidate values found there.
+- `--us` lets the review tell which party is the counterparty when a confirmation only says
+  Buyer and Seller. Without it, Counterparty stays blank unless the document has a
+  counterparty label.
+- Without `--format`, the built-in copy of the 14 columns is used.
+
 ## What's in the workbook
 
 | Sheet | What it shows |

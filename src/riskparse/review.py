@@ -42,6 +42,7 @@ from riskparse.extract.dispatch import extract_bytes
 from riskparse.extract.profile import folder_class, layout_key
 from riskparse.fields import SYNONYMS, coverage, propose_fields
 from riskparse.fswalk import check_output_location, walk_files
+from riskparse.rawformat import DEFAULT_HEADERS, build_rows, read_format_headers
 
 MAX_CELL = 32_000          # Excel's limit is 32,767 characters per cell
 MAX_TEXT_ROWS = 1_000_000  # Excel's limit is 1,048,576 rows per sheet
@@ -63,6 +64,10 @@ class ReviewResult:
     issues: list[tuple[str, str, str]] = field(default_factory=list)   # (doc/file, kind, detail)
     text_rows: int = 0
     proposals: dict[str, list] = field(default_factory=dict)          # doc -> [FieldProposal]
+    format_headers: list[str] = field(default_factory=list)
+    format_rows: list = field(default_factory=list)                   # [FormatRow]
+    format_unmapped: list[str] = field(default_factory=list)
+    raw_data: Path | None = None
 
     def counts(self) -> Counter:
         return Counter((d["folder_class"], d["type"], d["status"]) for d in self.documents)
@@ -97,7 +102,9 @@ def _sheet(wb: Workbook, title: str, headers: list[str], widths: list[int]):
     return ws
 
 
-def build_review(source: str | Path, out_dir: str | Path | None = None) -> ReviewResult:
+def build_review(source: str | Path, out_dir: str | Path | None = None, *,
+                 format_path: str | Path | None = None,
+                 us: list[str] | None = None) -> ReviewResult:
     src = Path(source)
     if not src.exists():
         raise ReviewError(f"{src} does not exist")
@@ -149,8 +156,32 @@ def build_review(source: str | Path, out_dir: str | Path | None = None) -> Revie
                               f"first {MAX_TEXT_ROWS} fit in Excel"))
         text_rows = text_rows[:MAX_TEXT_ROWS]
     result.text_rows = len(text_rows)
+    result.format_headers = read_format_headers(format_path) if format_path else DEFAULT_HEADERS
+    result.format_rows, result.format_unmapped = build_rows(
+        result.documents, result.proposals, result.format_headers, us)
     _write_workbook(result, text_rows, src)
+    result.raw_data = out / "raw-data.xlsx"
+    _write_raw_data(result, result.raw_data)
     return result
+
+
+def _fill_format_sheet(ws, result: ReviewResult) -> None:
+    _put(ws, 1, list(result.format_headers))
+    for i, h in enumerate(result.format_headers, start=1):
+        ws.cell(row=1, column=i).font = Font(bold=True)
+        ws.column_dimensions[get_column_letter(i)].width = max(12, len(h) + 4)
+    for r, row in enumerate(result.format_rows, start=2):
+        _put(ws, r, [row.values.get(h) for h in result.format_headers])
+    ws.freeze_panes = "A2"
+
+
+def _write_raw_data(result: ReviewResult, path: Path) -> None:
+    """The firm's format only, ready to paste into the library (proposals: verify first)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "raw-data-format"
+    _fill_format_sheet(ws, result)
+    wb.save(path)
 
 
 def _add(result: ReviewResult, text_rows: list, doc_no: str, folder: str, name: str,
@@ -243,6 +274,21 @@ def _write_workbook(result: ReviewResult, text_rows: list, src: Path) -> None:
         _put(labels_ws, i, [*key, len(docs_)])
     labels_ws.auto_filter.ref = labels_ws.dimensions
 
+    fmt = wb.create_sheet("raw-data-format")
+    _fill_format_sheet(fmt, result)
+    ev = _sheet(wb, "raw-data-evidence", ["row", "doc", "file", "attached_to", "column",
+                                          "value as written", "location (how found)",
+                                          "other candidates in the document"],
+                [5, 8, 34, 11, 18, 36, 34, 50])
+    r = 2
+    for n, row in enumerate(result.format_rows, start=2):
+        for h in result.format_headers:
+            if h in row.values:
+                _put(ev, r, [n, row.doc, row.file, row.attached_to, h, row.values[h],
+                             row.evidence.get(h), row.others.get(h)])
+                r += 1
+    ev.auto_filter.ref = ev.dimensions
+
     issues = _sheet(wb, "Issues", ["doc / file", "issue", "detail"], [30, 26, 120])
     for i, row in enumerate(result.issues, start=2):
         _put(issues, i, list(row))
@@ -268,6 +314,15 @@ def format_summary(result: ReviewResult) -> str:
     unmapped = {p.label_key for props in result.proposals.values() for p in props
                 if p.field == "(unmapped)"}
     lines.append(f"  {len(unmapped)} distinct label(s) not mapped yet (see the Labels sheet)")
+    if result.format_headers:
+        lines += ["", f"raw-data-format: {len(result.format_rows)} row(s) "
+                      "(one per document with any value); filled cells per column:"]
+        for h in result.format_headers:
+            filled = sum(1 for row in result.format_rows if h in row.values)
+            multi = sum(1 for row in result.format_rows if h in row.others)
+            note = f"  ({multi} with other candidates)" if multi else ""
+            mark = "  [no mapping for this header]" if h in result.format_unmapped else ""
+            lines.append(f"  {h.strip():<20} {filled:>3}{note}{mark}")
     lines += ["", "Key fields by layout group (documents with a value / documents in group):"]
     lines.append(f"  {'layout':<14} {'type':<5} {'docs':>4} " + " ".join(f"{h:>6}" for h, _ in
                                                                     _MATRIX))

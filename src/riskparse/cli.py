@@ -265,12 +265,13 @@ def cmd_extract(args) -> int:
 
 def cmd_review(args) -> int:
     from riskparse.review import build_review, format_summary
-    result = build_review(args.source, args.out)
+    result = build_review(args.source, args.out, format_path=args.format, us=args.us)
     print(format_summary(result))
     if args.labels:
         from riskparse.review import format_unmapped_labels
         print(format_unmapped_labels(result))
     print(f"\nOpen this workbook: {result.workbook}")
+    print(f"Your raw-data-format (proposed values, verify before use): {result.raw_data}")
     print("Share only the summary above (counts and layout groups). The workbook is "
           "confidential.")
     return 0
@@ -349,6 +350,11 @@ def build_parser() -> argparse.ArgumentParser:
                                        "ZIP or folder, with its readable text (no setup, no DB)")
     rv.add_argument("source", help="the contracts ZIP file, or a folder")
     rv.add_argument("--out", help="new output folder (default: next to the source, timestamped)")
+    rv.add_argument("--format", help="the firm's raw-data-format workbook; its first-row "
+                                     "headers define the output columns (default: built-in)")
+    rv.add_argument("--us", action="append", default=[],
+                    help="our company name as it appears on confirmations (repeatable); used "
+                         "to tell the counterparty apart from us")
     rv.add_argument("--labels", action="store_true",
                     help="also print the unmapped label wording (no values) to share")
     rv.set_defaults(func=cmd_review)

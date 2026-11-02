@@ -33,7 +33,8 @@ def test_review_builds_one_workbook_from_the_zip(tmp_path):
     r = build_review(z, tmp_path / "out")
     assert z.read_bytes() == before                         # input untouched
     wb = load_workbook(r.workbook)
-    assert wb.sheetnames == ["Summary", "Documents", "Text", "Fields", "Labels", "Issues"]
+    assert wb.sheetnames == ["Summary", "Documents", "Text", "Fields", "Labels",
+                             "raw-data-format", "raw-data-evidence", "Issues"]
     docs = list(wb["Documents"].iter_rows(min_row=2, values_only=True))
     files = {row[2]: row for row in docs}
     assert set(files) == {"SYN_phys.pdf", "SYN_scan.pdf", "SYN_swap.xlsx", "SYN_evergreen.msg",
