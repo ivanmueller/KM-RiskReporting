@@ -38,6 +38,7 @@ from riskparse.evidence.intake_zip import safe_extract
 from riskparse.extract.dispatch import extract_bytes
 from riskparse.extract.profile import folder_class
 from riskparse.fswalk import check_output_location, walk_files
+from riskparse.names import DEFAULT_MAP, NameMap, apply_name_map, load_name_map
 from riskparse.rawformat import DEFAULT_HEADERS, attr_for, cell_value, read_format_headers
 
 MAX_CELL = 32_000          # Excel's limit is 32,767 characters per cell
@@ -67,6 +68,8 @@ class ReviewResult:
     trades: list[Trade] = field(default_factory=list)                 # one per trade
     format_headers: list[str] = field(default_factory=list)
     format_unmapped: list[str] = field(default_factory=list)
+    name_map: NameMap | None = None
+    names: list[list] = field(default_factory=list)      # names sheet rows
 
     def counts(self) -> Counter:
         return Counter((d["folder_class"], d["type"], d["status"]) for d in self.documents)
@@ -93,11 +96,20 @@ def _put(ws, row: int, values: list) -> None:
 
 def build_review(source: str | Path, out_dir: str | Path | None = None, *,
                  format_path: str | Path | None = None,
-                 us: list[str] | None = None) -> ReviewResult:
+                 us: list[str] | None = None,
+                 names_path: str | Path | None = None,
+                 use_names: bool = True) -> ReviewResult:
+    """``names_path`` defaults to ``config/counterparty_map.csv`` when that file exists."""
     src = Path(source)
     if not src.exists():
         raise ReviewError(f"{src} does not exist")
     headers = read_format_headers(format_path) if format_path else list(DEFAULT_HEADERS)
+    nmap = None
+    if use_names:
+        if names_path is not None:
+            nmap = load_name_map(names_path)
+        elif DEFAULT_MAP.is_file():
+            nmap = load_name_map(DEFAULT_MAP)
     if out_dir is None:
         out_dir = src.parent / f"{src.stem}_review_{datetime.now():%Y%m%d-%H%M%S}"
     out = check_output_location(out_dir, *([src] if src.is_dir() else []))
@@ -105,6 +117,7 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     result = ReviewResult(out, out / "review.xlsx", out / "raw-data.xlsx",
                           format_headers=headers,
                           format_unmapped=[h for h in headers if attr_for(h) is None])
+    result.name_map = nmap
     us_names = tuple(us) if us else DEFAULT_US
 
     if src.is_dir():
@@ -147,6 +160,8 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
         text_rows = text_rows[:MAX_TEXT_ROWS]
     result.text_rows = len(text_rows)
     result.trades = merge_trades(result.parsed)
+    result.names = _name_rows(result.parsed, nmap)
+    apply_name_map(result.trades, nmap)
     _write_raw_data(result)
     _write_review(result, text_rows, src)
     return result
@@ -177,6 +192,20 @@ def _add(result: ReviewResult, text_rows: list, doc_no: str, folder: str, name: 
         if s.kind not in ("attachment", "transport_header"):
             text_rows.append([doc_no, name, s.location, s.text])
     return r
+
+
+def _name_rows(parsed: list[Trade], nmap: NameMap | None) -> list[list]:
+    """Every party spelling seen in any document, with its master name."""
+    seen: Counter = Counter()
+    for t in parsed:
+        for name in {t.buyer, t.seller} - {""}:
+            seen[name] += 1
+    rows = []
+    for name, n in sorted(seen.items(), key=lambda kv: kv[0].casefold()):
+        master, how = nmap.lookup(name) if nmap else (None, "")
+        rows.append([name, master or "", how or ("NOT IN MAP" if nmap else "no map loaded"),
+                     n])
+    return rows
 
 
 # --------------------------------------------------------------------------- writers
@@ -237,6 +266,8 @@ def _write_review(result: ReviewResult, text_rows: list, src: Path) -> None:
     _fill(wb.create_sheet("evidence"), ["row", "Contract #", "column", "value",
                                         "where it came from (location: text as written)",
                                         "doc", "file"], ev, [5, 22, 18, 22, 80, 7, 50])
+    _fill(wb.create_sheet("names"), ["name as written", "master name", "matched",
+                                     "documents"], result.names, [60, 50, 26, 10])
     _fill(wb.create_sheet("documents"), DOC_COLUMNS,
           ([d.get(c, "") for c in DOC_COLUMNS] for d in result.documents),
           [7, 30, 50, 9, 11, 6, 15, 26, 7, 6, 7, 50, 66, 60])
@@ -278,6 +309,12 @@ def format_summary(result: ReviewResult) -> str:
     for fam, n in by_family.most_common():
         lines.append(f"  {fam:<28} {n}")
     lines.append(f"Unrecognised documents (not in raw-data): {len(unrec)}")
+    if result.name_map is None:
+        lines.append("Counterparty map: not loaded (names kept as written)")
+    else:
+        missing = sum(1 for r in result.names if r[2] == "NOT IN MAP")
+        lines.append(f"Counterparty map: {len(result.names) - missing} spelling(s) mapped, "
+                     f"{missing} not in the map (see the names sheet)")
     lines.append(f"Trades with something to look at: {len(attention)} (see the checks sheet)")
     kinds = Counter(flag_kind(f) for t in result.trades for f in t.flags)
     for kind, n in kinds.most_common(8):

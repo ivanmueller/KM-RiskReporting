@@ -45,16 +45,16 @@ def test_review_produces_one_row_per_trade_in_the_firm_format(tmp_path):
     assert by_no["90002"]["Quantity"] == 4000            # amendment applied
     assert by_no["2099001"]["Fixed Differential"] == -6.1
     assert by_no["2099001"]["Trade Date"].year == 2026   # a real date, not text
-    assert by_no["167000001 / 181000001"]["Fixed Differential"] is None
+    assert by_no["181000001"]["Fixed Differential"] is None
 
 
 def test_checks_evidence_documents_and_issues(tmp_path):
     r = build_review(_zip(tmp_path), tmp_path / "out")
     wb = load_workbook(r.workbook)
-    assert wb.sheetnames == ["summary", "raw-data-format", "checks", "evidence", "documents",
-                             "text", "issues"]
+    assert wb.sheetnames == ["summary", "raw-data-format", "checks", "evidence", "names",
+                             "documents", "text", "issues"]
     checks = {row[0]: row for row in wb["checks"].iter_rows(min_row=2, values_only=True)}
-    assert checks["167000001 / 181000001"][6] == 106.12        # swap fixed price
+    assert checks["181000001"][6] == 106.12        # swap fixed price
     assert "AMENDED" in checks["90002"][9]
     assert "key terms agree" in checks["119999001"][9]
     ev = list(wb["evidence"].iter_rows(min_row=2, values_only=True))

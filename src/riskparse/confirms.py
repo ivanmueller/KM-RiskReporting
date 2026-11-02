@@ -80,6 +80,7 @@ class Trade:
     evidence: dict[str, str] = field(default_factory=dict)   # field -> "location: raw text"
     flags: list[str] = field(default_factory=list)
     documents: list[str] = field(default_factory=list)       # all supporting documents
+    names_as_written: dict[str, str] = field(default_factory=dict)  # before the name map
 
 
 # --------------------------------------------------------------------------- helpers
@@ -441,7 +442,9 @@ def parse_isda_swap(result, doc, name, us) -> list[Trade]:
     lines = _lines(result)
     t = Trade("ISDA swap (PDF)", doc, name)
     v, loc = _colon(lines, "Our Reference Number")
-    _set(t, "contract_no", clean(v), loc, v)
+    # "167034481 / 181749496": the second number is the transaction (it is also the number
+    # in the file name); the full reference stays in the evidence.
+    _set(t, "contract_no", clean(v).split("/")[-1].strip() if v else "", loc, v)
     v, loc = _colon(lines, "Trade Date")
     _set(t, "trade_date", parse_date(v, "%B %d, %Y"), loc, v)
     for label, attr in (("Effective Date", "start_date"), ("Termination Date", "end_date")):

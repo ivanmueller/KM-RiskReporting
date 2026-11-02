@@ -48,6 +48,8 @@
 !inventory/templates/inventory_Evergreen_Agreements.csv
 !inventory/templates/inventory_Trade_Crosswalk.csv
 !inventory/templates/inventory_Open_Questions.csv
+# ...and the counterparty master-name map Risk maintains (company names only, no trades)
+!config/counterparty_map.csv
 
 # Completed inventories and any real source data
 /Contracts/

@@ -130,7 +130,7 @@ for a gate that needs real data or sign-off.
 - [ ] Choose which templates to build first, from the actual document counts and layout groups (A7). *Tooling ready; needs your profile summary.*
 - [~] Priority Excel / text-PDF / email extractors, with field evidence locations. *Done: layout-neutral text extraction with exact locations for `.pdf`, `.xlsx` and `.msg` (attachments registered as child documents), stored in SQL (`0003`), verified against hashes, tested on synthetic files. Left: counterparty templates that turn located text into fields.*
 - [ ] OCR route for scans, if any are present. *Scans are already detected (`NEEDS_OCR` / `PARTIAL_TEXT`); the OCR tool itself still needs approval.*
-- [ ] Normalization reference maps (counterparty, hub, unit, calendar), versioned
+- [~] Normalization reference maps (counterparty, hub, unit, calendar), versioned. *Done: counterparty master-name map `config/counterparty_map.csv` (all 18 October spellings → 12 counterparties), versioned in git, with unmapped names flagged. Left: hub, unit and calendar maps.*
 - [ ] Real Egistix and trader-sheet import mappings
 - [ ] Unit tests: negative and zero values, date formats, buy/sell ambiguity
 - [ ] **Gate:** priority documents represented; omissions and ambiguities visible

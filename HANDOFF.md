@@ -37,14 +37,16 @@ ruff check src tests
 riskparse demo-smoke --workdir var/demo
 ```
 
-Windows/PowerShell equivalents are in `README.md`. Expected result: `334 passed` (the
+Windows/PowerShell equivalents are in `README.md`. Expected result: `376 passed` (the
 repository-hygiene tests skip outside a git checkout), and the demo ends with `SMOKE DEMO: PASS`.
 
 > **Step 1 entry point:** `riskparse review <zip or folder> --format raw-data-format.xlsx`
 > (`src/riskparse/review.py`, `docs/STEP1_QUICKSTART.md`). Family parsers in
 > `src/riskparse/confirms.py` (built from the real October confirmations) produce one row per
 > trade in the firm's format (`src/riskparse/rawformat.py`). They merge the Marex PDF with its
-> daily summary, apply `UPDATED-` amendments and flag anything to check. Tests use synthetic
+> daily summary, apply `UPDATED-` amendments and flag anything to check. Company names are
+> mapped to master names by `config/counterparty_map.csv` (`src/riskparse/names.py`;
+> maintained by Risk; unmapped spellings are kept as written and flagged). Tests use synthetic
 > replicas (`tests/confirm_fixtures.py`); real confirmations stay out of the repository. The
 > registration, database and audit pieces below are groundwork for later stages.
 

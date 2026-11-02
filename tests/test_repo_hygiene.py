@@ -12,6 +12,8 @@ FORBIDDEN = {".pdf", ".msg", ".eml", ".tif", ".tiff", ".docx", ".doc", ".xls", "
              ".xlsx", ".csv", ".zip", ".7z", ".rar", ".rtf", ".db", ".sqlite", ".sqlite3",
              ".pfx", ".p12", ".pem", ".key"}
 TEMPLATE_DIR = "inventory/templates/"
+# The counterparty name map is reference data the business keeps in the repo on purpose.
+NAME_MAP = "config/counterparty_map.csv"
 
 
 def _tracked():
@@ -30,8 +32,8 @@ def _expected_template_names():
 
 def test_no_confidential_file_types_tracked():
     """Every extension counts, case-insensitively: contract.PDF and contract.pdf.txt fail."""
-    templates = _expected_template_names()
-    bad = [f for f in _tracked() if f not in templates
+    allowed = _expected_template_names() | {NAME_MAP}
+    bad = [f for f in _tracked() if f not in allowed
            and {s.lower() for s in Path(f).suffixes} & FORBIDDEN]
     assert bad == []
 
@@ -82,3 +84,11 @@ def test_csv_templates_contain_no_data_beyond_seed_rows():
                                                                      encoding="utf-8") as fh:
             rows = list(csv.DictReader(fh))
         assert len(rows) == len(s.seed_rows), s.name
+
+
+def test_name_map_holds_only_names_and_notes():
+    """The one tracked CSV outside the templates: names only, no trade data."""
+    with (REPO / NAME_MAP).open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.reader(fh))
+    assert rows[0] == ["name_as_written", "master_name", "notes"]
+    assert all(len(r) <= 3 for r in rows)

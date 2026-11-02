@@ -47,6 +47,8 @@ cd C:\RiskCode\KM-RiskReporting
 **`review.xlsx`** holds the same two sheets, plus:
 - **evidence**: for every filled cell, the exact place in the document and the text it was read
   from;
+- **names**: every company spelling found, the master name it became, and `NOT IN MAP` for
+  any spelling the counterparty map does not have yet;
 - **documents**: which parser read each file;
 - **text**: all readable text;
 - **issues**.
@@ -68,8 +70,32 @@ Column conventions:
 - **Trader** is our trader.
 - **Fixed Differential** is the price differential to the index.
 
+- A swap's **Contract #** is the transaction number: the second number of the bank's reference
+  ("167034481 / 181749496" gives 181749496). The full reference stays on the evidence sheet.
+- Swap **Primary Index** is kept as the bank writes it (e.g. `OIL-WTI-NYMEX`).
+
 A document that matches none of these layouts is listed as `UNRECOGNISED` and left out of
 raw-data; it is never guessed at. A new broker or layout needs a new parser: send a sample.
+
+## Counterparty master names: `config\counterparty_map.csv`
+
+Brokers spell the same company in different ways ("Secure" vs "SECURE", "Inc" vs "Inc.",
+"&" vs "and"). The map turns every spelling into one master name in the **Counterparty** and
+**Seller** columns. It is a plain CSV in the repository that you edit in Excel:
+
+| name_as_written | master_name | notes |
+| --- | --- | --- |
+| Spur Petroleum Ltd | Spur Petroleum Ltd. | |
+
+- A spelling is matched exactly first, then ignoring only case, full stops, commas,
+  apostrophes, spacing and "&" vs "and".
+- A spelling that is not in the map is **kept as written**, flagged on the checks sheet and
+  listed as `NOT IN MAP` on the names sheet. To fix it, add a row and run again.
+- One spelling cannot map to two master names; the run stops and names the line.
+- Save as **CSV UTF-8** in Excel.
+- It is picked up automatically when you run from the repository folder. Use
+  `--names <file>` to point at a copy kept elsewhere, or `--no-names` to keep every name
+  exactly as written.
 
 ## What to send back
 

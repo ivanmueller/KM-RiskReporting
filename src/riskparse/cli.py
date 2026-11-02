@@ -272,7 +272,8 @@ def cmd_review(args) -> int:
         print("--us still contains the placeholder text; replace it with our company's "
               "name as it appears on confirmations", file=sys.stderr)
         return 4
-    result = build_review(args.source, args.out, format_path=args.format, us=args.us or None)
+    result = build_review(args.source, args.out, format_path=args.format, us=args.us or None,
+                          names_path=args.names, use_names=not args.no_names)
     print(format_summary(result))
     print(f"\nraw-data (your format + checks): {result.raw_data}")
     print(f"review workbook (evidence, text, documents): {result.workbook}")
@@ -355,6 +356,10 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--out", help="new output folder (default: next to the source, timestamped)")
     rv.add_argument("--format", help="the firm's raw-data-format workbook; its first-row "
                                      "headers define the output columns (default: built-in)")
+    rv.add_argument("--names", help="counterparty master-name map (CSV); default: "
+                                    "config/counterparty_map.csv if present")
+    rv.add_argument("--no-names", action="store_true",
+                    help="keep counterparty names exactly as written")
     rv.add_argument("--us", action="append", default=[],
                     help="our company name as it appears on confirmations (repeatable; "
                          "default: Kingston Marketing)")
@@ -405,10 +410,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"evidence check failed: {exc}", file=sys.stderr)
             return 5
         from riskparse.fswalk import UnsafeOutputError
+        from riskparse.names import NameMapError
         from riskparse.rawformat import FormatFileError
         from riskparse.review import ReviewError
         if isinstance(exc, ZipIntakeError | FileExistsError | UnsafeOutputError | ReviewError
-                      | FormatFileError):
+                      | FormatFileError | NameMapError):
             print(f"intake refused: {exc}", file=sys.stderr)
             return 4
         raise

@@ -126,7 +126,7 @@ def test_isda_swap_sides_and_fixed_price():
     fam, [t] = _parse(isda_pdf(), "PDF")
     assert fam == "isda_swap"
     assert (t.contract_no, t.trade_date, t.start_date, t.end_date, t.term) == (
-        "167000001 / 181000001", date(2026, 10, 2), date(2027, 10, 1), date(2027, 10, 31),
+        "181000001", date(2026, 10, 2), date(2027, 10, 1), date(2027, 10, 31),
         "OCT-27")
     assert (t.side, t.counterparty, t.seller) == ("SELL", "SYN Bank of Canada", US)
     assert (t.quantity, t.unit, t.primary_index) == (Decimal("10000.00"), "bbl", "OIL-WTI-NYMEX")
