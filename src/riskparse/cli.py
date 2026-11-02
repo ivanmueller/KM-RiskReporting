@@ -272,15 +272,11 @@ def cmd_review(args) -> int:
         print("--us still contains the placeholder text; replace it with our company's "
               "name as it appears on confirmations", file=sys.stderr)
         return 4
-    result = build_review(args.source, args.out, format_path=args.format, us=args.us)
+    result = build_review(args.source, args.out, format_path=args.format, us=args.us or None)
     print(format_summary(result))
-    if args.labels:
-        from riskparse.review import format_unmapped_labels
-        print(format_unmapped_labels(result))
-    print(f"\nOpen this workbook: {result.workbook}")
-    print(f"Your raw-data-format (proposed values, verify before use): {result.raw_data}")
-    print("Share only the summary above (counts and layout groups). The workbook is "
-          "confidential.")
+    print(f"\nraw-data (your format + checks): {result.raw_data}")
+    print(f"review workbook (evidence, text, documents): {result.workbook}")
+    print("The summary above is counts only. The workbooks contain contract details.")
     return 0
 
 
@@ -360,10 +356,8 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--format", help="the firm's raw-data-format workbook; its first-row "
                                      "headers define the output columns (default: built-in)")
     rv.add_argument("--us", action="append", default=[],
-                    help="our company name as it appears on confirmations (repeatable); used "
-                         "to tell the counterparty apart from us")
-    rv.add_argument("--labels", action="store_true",
-                    help="also print the unmapped label wording (no values) to share")
+                    help="our company name as it appears on confirmations (repeatable; "
+                         "default: Kingston Marketing)")
     rv.set_defaults(func=cmd_review)
 
     pf = sub.add_parser("profile-documents", help="count and size contract documents by "

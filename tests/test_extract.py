@@ -60,9 +60,32 @@ def test_xlsx_formula_with_saved_value_reports_value_and_formula(tmp_path):
     assert r.status == base.TEXT_EXTRACTED
 
 
-def test_xls_and_corrupt_workbooks():
-    assert extract_bytes(b"\xd0\xcf\x11\xe0", "XLS", filename="old.xls").status == base.UNSUPPORTED
+def test_corrupt_workbooks_fail_cleanly():
+    assert extract_bytes(b"\xd0\xcf\x11\xe0", "XLS", filename="old.xls").status == base.FAILED
     assert extract_bytes(b"not a zip", "XLSX").status == base.FAILED
+
+
+def test_legacy_xls_cells_dates_and_numbers():
+    import xlwt
+    wb = xlwt.Workbook()
+    ws = wb.add_sheet("Summary")
+    ws.write(0, 0, "Reference")
+    ws.write(0, 1, "Price")
+    ws.write(1, 0, 119314923.0)
+    ws.write(1, 1, -6.5)
+    ws.write(1, 2, datetime(2026, 10, 5, 14, 53), xlwt.easyxf(num_format_str="YYYY-MM-DD"))
+    hidden = wb.add_sheet("Hidden")
+    hidden.write(0, 0, "SYNTHETIC")
+    hidden.visibility = 1
+    buf = io.BytesIO()
+    wb.save(buf)
+    r = extract_bytes(buf.getvalue(), "XLS", filename="x.xls")
+    seg = {s.location: s for s in r.segments}
+    assert r.status == base.TEXT_EXTRACTED
+    assert seg["Summary!A2"].text == "119314923.0" and seg["Summary!B2"].text == "-6.5"
+    assert seg["Summary!C2"].meta["type"] == "datetime"
+    assert seg["Summary!C2"].text.startswith("2026-10-05")
+    assert r.metadata["hidden_sheets"] == ["Hidden (hidden)"]
 
 
 # --- PDF -----------------------------------------------------------------------------

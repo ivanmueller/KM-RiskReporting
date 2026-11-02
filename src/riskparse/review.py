@@ -1,25 +1,21 @@
 """Step 1 in one command: ``riskparse review <zip or folder>``.
 
-Builds one Excel workbook for Risk to review the October contracts, and nothing else:
-no settings file, no database, no registration.
+Reads every confirmation and writes the trades in the firm's ``raw-data-format``.
 
-* **Summary**: document counts by folder (Physical / Financial / Evergreen), file type and
-  whether the text could be read.
-* **Documents**: one row per document, with email attachments as their own rows, showing
-  status, pages, sheets, warnings, layout group and SHA-256.
-* **Text**: every line or cell of readable text, with its exact location (``p2:L14``,
-  ``Confirm!B7``, ``body:L4``), ready to filter in Excel.
-* **Fields**: proposed trade fields (trade date, price, quantity, delivery point...) found
-  as "label -> value" pairs, each with its exact location and blank columns for Risk to
-  mark OK or wrong (see :mod:`riskparse.fields`).
-* **Labels**: every label found, per layout group, with **no values**, used to improve the
-  label mapping.
-* **Issues**: everything that needs a human look (scans, refused ZIP members, unreadable
-  folders, hidden sheets, embedded emails).
+``raw-data.xlsx``:
 
-A ZIP is extracted into the output folder with the same protections as ``intake-zip``. The
-input is never modified, and the output folder must be new. Nothing is interpreted as a
-price, volume or date; that is the next step.
+* **raw-data-format**: the firm's columns, one row per trade (dates as dates, numbers as
+  numbers).
+* **checks**: per trade, our buy/sell, settlement currency, price quote unit, swap fixed
+  price, source family, supporting documents and anything that needs a look (amendments,
+  duplicates, missing values), with columns for Risk to mark each row OK or WRONG.
+
+``review.xlsx``: the same two sheets plus **evidence** (for every filled cell, the exact
+place in the document and the text it was read from), **documents** (which parser read
+each file), **text** (all readable text with locations) and **issues**.
+
+Trades come only from the confirmation-family parsers (:mod:`riskparse.confirms`).
+A document no parser recognises is listed as ``UNRECOGNISED``; it is not guessed at.
 """
 
 from __future__ import annotations
@@ -28,7 +24,7 @@ import hashlib
 import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -36,20 +32,23 @@ from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
+from riskparse.confirms import DEFAULT_US, Trade, merge_trades, parse_document
 from riskparse.evidence.hashing import file_type_for
 from riskparse.evidence.intake_zip import safe_extract
 from riskparse.extract.dispatch import extract_bytes
-from riskparse.extract.profile import folder_class, layout_key
-from riskparse.fields import SYNONYMS, coverage, propose_fields
+from riskparse.extract.profile import folder_class
 from riskparse.fswalk import check_output_location, walk_files
-from riskparse.rawformat import DEFAULT_HEADERS, build_rows, read_format_headers
+from riskparse.rawformat import DEFAULT_HEADERS, attr_for, cell_value, read_format_headers
 
 MAX_CELL = 32_000          # Excel's limit is 32,767 characters per cell
 MAX_TEXT_ROWS = 1_000_000  # Excel's limit is 1,048,576 rows per sheet
 
 DOC_COLUMNS = ["doc", "folder", "file", "attached_to", "folder_class", "type", "status",
-               "pages", "pages_without_text", "sheets", "attachments", "text_lines",
-               "layout_group", "warnings", "sha256", "path"]
+               "parsed_as", "trades", "pages", "sheets", "warnings", "sha256", "path"]
+CHECK_COLUMNS = ["Contract #", "Our side", "Source", "Broker / issuer", "Settlement currency",
+                 "Price quoted in", "Swap fixed price", "Location", "Documents",
+                 "Needs attention", "Risk check (OK/WRONG)", "Comment", "Checked by"]
+_CHECK_WIDTHS = [22, 8, 24, 22, 10, 10, 10, 26, 60, 70, 14, 24, 12]
 
 
 class ReviewError(RuntimeError):
@@ -60,23 +59,21 @@ class ReviewError(RuntimeError):
 class ReviewResult:
     out_dir: Path
     workbook: Path
+    raw_data: Path
     documents: list[dict] = field(default_factory=list)
     issues: list[tuple[str, str, str]] = field(default_factory=list)   # (doc/file, kind, detail)
     text_rows: int = 0
-    proposals: dict[str, list] = field(default_factory=dict)          # doc -> [FieldProposal]
+    parsed: list[Trade] = field(default_factory=list)                 # before merging
+    trades: list[Trade] = field(default_factory=list)                 # one per trade
     format_headers: list[str] = field(default_factory=list)
-    format_rows: list = field(default_factory=list)                   # [FormatRow]
     format_unmapped: list[str] = field(default_factory=list)
-    raw_data: Path | None = None
 
     def counts(self) -> Counter:
         return Counter((d["folder_class"], d["type"], d["status"]) for d in self.documents)
 
 
 def _clean(value):
-    """Make a value safe for an Excel cell: text only, no control characters, length-capped."""
-    if value is None:
-        return None
+    """Make a value safe for an Excel cell: no control characters, length-capped."""
     if not isinstance(value, str):
         return value
     text = ILLEGAL_CHARACTERS_RE.sub("", value)
@@ -90,16 +87,8 @@ def _put(ws, row: int, values: list) -> None:
         cell = ws.cell(row=row, column=col, value=_clean(value))
         if isinstance(cell.value, str):
             cell.data_type = "s"     # never let document text become an Excel formula
-
-
-def _sheet(wb: Workbook, title: str, headers: list[str], widths: list[int]):
-    ws = wb.create_sheet(title)
-    _put(ws, 1, headers)
-    for i, w in enumerate(widths, start=1):
-        ws.cell(row=1, column=i).font = Font(bold=True)
-        ws.column_dimensions[get_column_letter(i)].width = w
-    ws.freeze_panes = "A2"
-    return ws
+        elif isinstance(value, date):
+            cell.number_format = "yyyy-mm-dd"
 
 
 def build_review(source: str | Path, out_dir: str | Path | None = None, *,
@@ -108,11 +97,15 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     src = Path(source)
     if not src.exists():
         raise ReviewError(f"{src} does not exist")
+    headers = read_format_headers(format_path) if format_path else list(DEFAULT_HEADERS)
     if out_dir is None:
         out_dir = src.parent / f"{src.stem}_review_{datetime.now():%Y%m%d-%H%M%S}"
     out = check_output_location(out_dir, *([src] if src.is_dir() else []))
     out.mkdir(parents=True)
-    result = ReviewResult(out, out / "review.xlsx")
+    result = ReviewResult(out, out / "review.xlsx", out / "raw-data.xlsx",
+                          format_headers=headers,
+                          format_unmapped=[h for h in headers if attr_for(h) is None])
+    us_names = tuple(us) if us else DEFAULT_US
 
     if src.is_dir():
         root = src
@@ -129,15 +122,12 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
         result.issues.append((err.split(": ", 1)[0], "NOT_READ", err))
 
     text_rows: list[list] = []
-    n = 0
-    for path in files:
+    for n, path in enumerate(files, start=1):
         rel = path.relative_to(root)
-        n += 1
         doc_no = f"D{n:03d}"
-        data = path.read_bytes()
         fclass = folder_class(rel)
         r = _add(result, text_rows, doc_no, rel.parent.as_posix(), path.name, "", fclass,
-                 file_type_for(path), data, str(path))
+                 file_type_for(path), path.read_bytes(), str(path), us_names)
         for i, att in enumerate(r.attachments, start=1):
             att_no = f"{doc_no}.{i}"
             if att.data is None:
@@ -149,222 +139,153 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
                 result.issues.append((att_no, "ATTACHMENT_NOT_EXTRACTED", att.note))
                 continue
             _add(result, text_rows, att_no, rel.parent.as_posix(), att.filename, doc_no, fclass,
-                 file_type_for(att.filename), att.data, f"{path}!/{att.filename}")
+                 file_type_for(att.filename), att.data, f"{path}!/{att.filename}", us_names)
 
     if len(text_rows) > MAX_TEXT_ROWS:
         result.issues.append(("", "TEXT_TRUNCATED", f"{len(text_rows)} text rows; only the "
                               f"first {MAX_TEXT_ROWS} fit in Excel"))
         text_rows = text_rows[:MAX_TEXT_ROWS]
     result.text_rows = len(text_rows)
-    result.format_headers = read_format_headers(format_path) if format_path else DEFAULT_HEADERS
-    result.format_rows, result.format_unmapped = build_rows(
-        result.documents, result.proposals, result.format_headers, us)
-    _write_workbook(result, text_rows, src)
-    result.raw_data = out / "raw-data.xlsx"
-    _write_raw_data(result, result.raw_data)
+    result.trades = merge_trades(result.parsed)
+    _write_raw_data(result)
+    _write_review(result, text_rows, src)
     return result
 
 
-def _fill_format_sheet(ws, result: ReviewResult) -> None:
-    _put(ws, 1, list(result.format_headers))
-    for i, h in enumerate(result.format_headers, start=1):
-        ws.cell(row=1, column=i).font = Font(bold=True)
-        ws.column_dimensions[get_column_letter(i)].width = max(12, len(h) + 4)
-    for r, row in enumerate(result.format_rows, start=2):
-        _put(ws, r, [row.values.get(h) for h in result.format_headers])
-    ws.freeze_panes = "A2"
-
-
-def _write_raw_data(result: ReviewResult, path: Path) -> None:
-    """The firm's format only, ready to paste into the library (proposals: verify first)."""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "raw-data-format"
-    _fill_format_sheet(ws, result)
-    wb.save(path)
-
-
 def _add(result: ReviewResult, text_rows: list, doc_no: str, folder: str, name: str,
-         parent: str, fclass: str, ftype: str, data: bytes, path: str):
+         parent: str, fclass: str, ftype: str, data: bytes, path: str, us):
     r = extract_bytes(data, ftype, filename=name)
+    family, trades = parse_document(r, ftype, doc_no, name, us)
+    result.parsed.extend(trades)
     md = r.metadata
     result.documents.append({
         "doc": doc_no, "folder": folder, "file": name, "attached_to": parent,
         "folder_class": fclass, "type": ftype, "status": r.status,
-        "pages": md.get("pages", ""),
-        "pages_without_text": " ".join(map(str, md.get("pages_without_text", []))),
+        "parsed_as": trades[0].family if trades else ("UNRECOGNISED" if r.segments else ""),
+        "trades": len(trades), "pages": md.get("pages", ""),
         "sheets": len(md["sheets"]) if "sheets" in md else "",
-        "attachments": md.get("attachments", ""),
-        "text_lines": len([s for s in r.segments if s.kind != "attachment"]),
-        "layout_group": layout_key(r, ftype), "warnings": " | ".join(r.warnings),
-        "sha256": hashlib.sha256(data).hexdigest(), "path": path,
+        "warnings": " | ".join(r.warnings), "sha256": hashlib.sha256(data).hexdigest(),
+        "path": path,
     })
-    if r.status not in ("TEXT_EXTRACTED",):
+    if r.status != "TEXT_EXTRACTED":
         result.issues.append((doc_no, r.status, " | ".join(r.warnings) or r.status))
+    if family is None and r.segments and not parent:
+        result.issues.append((doc_no, "UNRECOGNISED",
+                              f"{name}: no confirmation parser matches this layout; "
+                              "not included in raw-data"))
     for s in r.segments:
-        if s.kind != "attachment":
+        if s.kind not in ("attachment", "transport_header"):
             text_rows.append([doc_no, name, s.location, s.text])
-    result.proposals[doc_no] = propose_fields(r)
     return r
 
 
-def _write_workbook(result: ReviewResult, text_rows: list, src: Path) -> None:
+# --------------------------------------------------------------------------- writers
+
+def _format_rows(result: ReviewResult):
+    for t in result.trades:
+        yield [cell_value(t, a) if (a := attr_for(h)) else None for h in result.format_headers]
+
+
+def _check_rows(result: ReviewResult):
+    for t in result.trades:
+        yield [t.contract_no, t.side, t.family, t.broker, t.currency, t.price_unit,
+               cell_value(t, "fixed_price"), t.location, "\n".join(t.documents),
+               "\n".join(t.flags), None, None, None]
+
+
+def _fill(ws, headers: list[str], rows, widths: list[int] | None = None) -> None:
+    _put(ws, 1, headers)
+    for i, h in enumerate(headers, start=1):
+        ws.cell(row=1, column=i).font = Font(bold=True)
+        w = widths[i - 1] if widths else max(12, len(h) + 4)
+        ws.column_dimensions[get_column_letter(i)].width = w
+    for r, values in enumerate(rows, start=2):
+        _put(ws, r, values)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+
+def _write_raw_data(result: ReviewResult) -> None:
     wb = Workbook()
     ws = wb.active
-    ws.title = "Summary"
-    tops = [d for d in result.documents if not d["attached_to"]]
-    lines = [
-        ["October contracts - document review"],
-        [f"Source: {src}"],
-        [f"Generated: {datetime.now().astimezone():%Y-%m-%d %H:%M %Z}"],
-        [f"{len(tops)} file(s), {len(result.documents) - len(tops)} email attachment(s), "
-         f"{len(result.documents)} document(s); {len(result.issues)} issue(s) to review"],
-        ["Nothing in this workbook is interpreted as a price, volume or date. CONFIDENTIAL: "
-         "keep it on the controlled machine."],
-        [],
-        ["Folder", "Type", "Status", "Documents"],
-    ]
-    for (fclass, ftype, status), count in sorted(result.counts().items()):
-        lines.append([fclass, ftype, status, count])
-    lines += [[], ["Layout group", "Type", "Documents"]]
-    groups = Counter((d["layout_group"], d["type"]) for d in result.documents
-                     if d["layout_group"])
-    for (key, ftype), count in groups.most_common():
-        lines.append([key, ftype, count])
-    for i, values in enumerate(lines, start=1):
-        _put(ws, i, values)
-    ws["A1"].font = Font(bold=True, size=14)
-    for col, w in zip("ABCD", (28, 10, 18, 12), strict=True):
-        ws.column_dimensions[col].width = w
+    ws.title = "raw-data-format"
+    _fill(ws, result.format_headers, _format_rows(result))
+    _fill(wb.create_sheet("checks"), CHECK_COLUMNS, _check_rows(result), _CHECK_WIDTHS)
+    wb.save(result.raw_data)
 
-    docs = _sheet(wb, "Documents", DOC_COLUMNS,
-                  [7, 30, 40, 11, 12, 6, 15, 6, 10, 7, 11, 10, 14, 60, 66, 60])
-    for i, d in enumerate(result.documents, start=2):
-        _put(docs, i, [d[c] for c in DOC_COLUMNS])
-    docs.auto_filter.ref = docs.dimensions
 
-    text = _sheet(wb, "Text", ["doc", "file", "location", "text"], [8, 40, 18, 120])
-    for i, row in enumerate(text_rows, start=2):
-        _put(text, i, row)
-    text.auto_filter.ref = text.dimensions
+def _write_review(result: ReviewResult, text_rows: list, src: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "summary"
+    lines = [f"Source: {src}  -  generated {datetime.now().astimezone():%Y-%m-%d %H:%M %Z}",
+             *format_summary(result).splitlines()]
+    for i, line in enumerate(lines, start=1):
+        _put(ws, i, [line])
+    ws.column_dimensions["A"].width = 110
+    ws["A1"].font = Font(bold=True)
 
-    by_doc = {d["doc"]: d for d in result.documents}
-    fields_ws = _sheet(wb, "Fields", ["doc", "file", "layout_group", "field", "label as written",
-                                      "value as written", "location", "found", "risk check (OK/"
-                                      "WRONG)", "correct value", "checked by"],
-                       [8, 34, 14, 16, 30, 40, 16, 11, 16, 24, 14])
-    row = 2
-    for doc_no, props in result.proposals.items():
-        d = by_doc[doc_no]
-        for p in sorted(props, key=lambda p: (p.field == "(unmapped)", p.field)):
-            _put(fields_ws, row, [doc_no, d["file"], d["layout_group"], p.field, p.label,
-                                  p.value, p.location, p.how, None, None, None])
-            row += 1
-    fields_ws.auto_filter.ref = fields_ws.dimensions
-
-    labels_ws = _sheet(wb, "Labels", ["layout_group", "type", "label (digits masked)",
-                                      "mapped to", "documents"], [14, 6, 40, 16, 10])
-    label_docs: dict[tuple[str, str, str, str], set] = {}
-    for doc_no, props in result.proposals.items():
-        d = by_doc[doc_no]
-        for p in props:
-            key = (d["layout_group"] or "(none)", d["type"], p.label_key, p.field)
-            label_docs.setdefault(key, set()).add(doc_no)
-    for i, (key, docs_) in enumerate(sorted(label_docs.items()), start=2):
-        _put(labels_ws, i, [*key, len(docs_)])
-    labels_ws.auto_filter.ref = labels_ws.dimensions
-
-    fmt = wb.create_sheet("raw-data-format")
-    _fill_format_sheet(fmt, result)
-    ev = _sheet(wb, "raw-data-evidence", ["row", "doc", "file", "attached_to", "column",
-                                          "value as written", "location (how found)",
-                                          "other candidates in the document"],
-                [5, 8, 34, 11, 18, 36, 34, 50])
-    r = 2
-    for n, row in enumerate(result.format_rows, start=2):
+    _fill(wb.create_sheet("raw-data-format"), result.format_headers, _format_rows(result))
+    _fill(wb.create_sheet("checks"), CHECK_COLUMNS, _check_rows(result), _CHECK_WIDTHS)
+    ev = []
+    for n, t in enumerate(result.trades, start=2):
         for h in result.format_headers:
-            if h in row.values:
-                _put(ev, r, [n, row.doc, row.file, row.attached_to, h, row.values[h],
-                             row.evidence.get(h), row.others.get(h)])
-                r += 1
-    ev.auto_filter.ref = ev.dimensions
-
-    issues = _sheet(wb, "Issues", ["doc / file", "issue", "detail"], [30, 26, 120])
-    for i, row in enumerate(result.issues, start=2):
-        _put(issues, i, list(row))
-    issues.auto_filter.ref = issues.dimensions
+            a = attr_for(h)
+            if a and cell_value(t, a) is not None:
+                ev.append([n, t.contract_no, h, cell_value(t, a), t.evidence.get(a, ""),
+                           t.source_doc, t.source_file])
+    _fill(wb.create_sheet("evidence"), ["row", "Contract #", "column", "value",
+                                        "where it came from (location: text as written)",
+                                        "doc", "file"], ev, [5, 22, 18, 22, 80, 7, 50])
+    _fill(wb.create_sheet("documents"), DOC_COLUMNS,
+          ([d.get(c, "") for c in DOC_COLUMNS] for d in result.documents),
+          [7, 30, 50, 9, 11, 6, 15, 26, 7, 6, 7, 50, 66, 60])
+    _fill(wb.create_sheet("text"), ["doc", "file", "location", "text"], text_rows,
+          [8, 45, 18, 120])
+    _fill(wb.create_sheet("issues"), ["doc / file", "issue", "detail"],
+          (list(i) for i in result.issues), [30, 26, 120])
     wb.save(result.workbook)
 
 
+_FLAG_KINDS = (("swap: no trader", "swap: no trader named on the confirmation"),
+               ("swap fixed price", "swap: fixed price kept on checks sheet, not a differential"),
+               ("AMENDED", "amendment applied (earlier version superseded)"),
+               ("also in", "duplicate document merged into one trade"),
+               ("trade date is after", "trade date after start date (balance-of-period?)"),
+               ("missing", "missing values"), ("cannot tell our side", "our side not found"),
+               ("trade state", "trade not Finalized"), ("Side column", "side mismatch"))
+
+
+def flag_kind(flag: str) -> str:
+    for prefix, kind in _FLAG_KINDS:
+        if flag.startswith(prefix):
+            return kind + (" - DISAGREES" if "DISAGREES" in flag else "")
+    return flag.split(":")[0]
+
+
 def format_summary(result: ReviewResult) -> str:
+    """Counts only (no names, prices or text): safe to share."""
     lines = [f"{'folder':<12} {'type':<6} {'status':<15} docs", "-" * 40]
     for (fclass, ftype, status), count in sorted(result.counts().items()):
         lines.append(f"{fclass:<12} {ftype:<6} {status:<15} {count}")
-    groups = Counter((d["layout_group"], d["type"]) for d in result.documents
-                     if d["layout_group"])
-    lines += ["-" * 40, f"{len(result.documents)} document(s), {len(groups)} layout group(s), "
-              f"{len(result.issues)} issue(s)"]
-    for (key, ftype), count in groups.most_common(10):
-        lines.append(f"  layout {key:<14} {ftype:<5} {count}")
-    cov = coverage(result.proposals)
-    n = len(result.documents)
-    lines += ["", f"Proposed fields (documents with a value, out of {n}):"]
-    for name in SYNONYMS:
-        lines.append(f"  {name:<16} {cov.get(name, 0)}")
-    unmapped = {p.label_key for props in result.proposals.values() for p in props
-                if p.field == "(unmapped)"}
-    lines.append(f"  {len(unmapped)} distinct label(s) not mapped yet (see the Labels sheet)")
-    if result.format_headers:
-        lines += ["", f"raw-data-format: {len(result.format_rows)} row(s) "
-                      "(one per document with any value); filled cells per column:"]
-        for h in result.format_headers:
-            filled = sum(1 for row in result.format_rows if h in row.values)
-            multi = sum(1 for row in result.format_rows if h in row.others)
-            note = f"  ({multi} with other candidates)" if multi else ""
-            mark = "  [no mapping for this header]" if h in result.format_unmapped else ""
-            lines.append(f"  {h.strip():<20} {filled:>3}{note}{mark}")
-    lines += ["", "Key fields by layout group (documents with a value / documents in group):"]
-    lines.append(f"  {'layout':<14} {'type':<5} {'docs':>4} " + " ".join(f"{h:>6}" for h, _ in
-                                                                    _MATRIX))
-    groups_docs: dict[tuple[str, str], list[str]] = {}
-    for d in result.documents:
-        groups_docs.setdefault((d["layout_group"] or "(none)", d["type"]), []).append(d["doc"])
-    for (key, ftype), docs_ in sorted(groups_docs.items(), key=lambda kv: -len(kv[1])):
-        cells = []
-        for _h, names in _MATRIX:
-            n_found = sum(1 for doc in docs_ if any(
-                p.field in names and p.value for p in result.proposals.get(doc, [])))
-            cells.append(f"{n_found:>6}")
-        lines.append(f"  {key:<14} {ftype:<5} {len(docs_):>4} " + " ".join(cells))
-    return "\n".join(lines)
-
-
-# Columns of the per-layout matrix: header -> canonical fields that count for it.
-_MATRIX = (("tdate", {"trade_date"}), ("ref", {"deal_reference"}),
-           ("party", {"buyer", "seller", "counterparty"}), ("price", {"price", "price_index"}),
-           ("qty", {"quantity"}), ("point", {"delivery_point"}), ("start", {"start_date"}),
-           ("end", {"end_date"}))
-
-
-def format_unmapped_labels(result: ReviewResult, limit: int = 120) -> str:
-    """Unmapped label wording (digits masked) with document counts. No values.
-
-    Labels are field names such as "Sold To" or "Nomination Deadline"; still, read the
-    list before sharing it, since a label could contain a counterparty or person name.
-    """
-    seen: dict[tuple[str, str, str], set] = {}
-    by_doc = {d["doc"]: d for d in result.documents}
-    for doc_no, props in result.proposals.items():
-        for p in props:
-            if p.field == "(unmapped)":
-                kind = "candidate" if "candidate" in p.how else "label"
-                seen.setdefault((p.label_key, by_doc[doc_no]["type"], kind), set()).add(doc_no)
-    rows = sorted(seen.items(), key=lambda kv: (-len(kv[1]), kv[0]))
-    lines = ["", "Unmapped labels (wording only, digits shown as #, no values).",
-             "CHECK BEFORE SHARING: remove any line that contains a company or person name.",
-             f"  {'docs':>4}  {'type':<5} {'kind':<9} label"]
-    for (key, ftype, kind), docs_ in rows[:limit]:
-        lines.append(f"  {len(docs_):>4}  {ftype:<5} {kind:<9} {key}")
-    if len(rows) > limit:
-        lines.append(f"  ... {len(rows) - limit} more on the Labels sheet")
+    unrec = [d for d in result.documents if d["parsed_as"] == "UNRECOGNISED"]
+    by_family = Counter(t.family for t in result.trades)
+    merged = sum(1 for t in result.trades for f in t.flags if f.startswith("also in "))
+    amended = sum(1 for t in result.trades for f in t.flags if f.startswith("AMENDED"))
+    attention = [t for t in result.trades if t.flags]
+    lines += ["", f"Trades: {len(result.trades)} (from {len(result.parsed)} parsed records; "
+                  f"{merged} duplicate document(s) merged, {amended} amendment(s) applied)"]
+    for fam, n in by_family.most_common():
+        lines.append(f"  {fam:<28} {n}")
+    lines.append(f"Unrecognised documents (not in raw-data): {len(unrec)}")
+    lines.append(f"Trades with something to look at: {len(attention)} (see the checks sheet)")
+    kinds = Counter(flag_kind(f) for t in result.trades for f in t.flags)
+    for kind, n in kinds.most_common(8):
+        lines.append(f"  {n:>3} x {kind}")
+    lines += ["", f"raw-data-format: filled cells per column (of {len(result.trades)} trades):"]
+    for h in result.format_headers:
+        a = attr_for(h)
+        filled = sum(1 for t in result.trades if a and cell_value(t, a) is not None)
+        mark = "  [header not recognised]" if a is None else ""
+        lines.append(f"  {h.strip():<20} {filled:>3}{mark}")
     return "\n".join(lines)

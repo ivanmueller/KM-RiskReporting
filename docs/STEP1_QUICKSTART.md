@@ -1,7 +1,8 @@
-# Step 1 quick start: review the October contracts
+# Step 1 quick start: confirmations in, raw-data-format out
 
-One command turns the contracts ZIP into **one Excel workbook** listing every document and its
-readable text. No settings file, no database.
+One command reads every confirmation in the contracts folder or ZIP and writes the trades in
+the firm's `raw-data-format`, **one row per trade**, with a checks sheet for Risk. No settings
+file, no database.
 
 ## Once: install (PowerShell)
 
@@ -14,70 +15,66 @@ py -3 -m venv .venv
 .\.venv\Scripts\pip install -e . --no-deps
 ```
 
-(Python 3.11 or newer. Already cloned? Run `git pull` in that folder instead of the first three lines.)
+(Python 3.11 or newer. Already cloned? Run `git pull` in that folder instead of the first three
+lines. After a `git pull` that changes `requirements\lock.txt`, run the two `pip install`
+lines again.)
 
 ## Each time: run it
 
 ```powershell
 cd C:\RiskCode\KM-RiskReporting
-.\.venv\Scripts\riskparse review "C:\Users\ivanm\Downloads\Risk Program.zip"
+.\.venv\Scripts\riskparse review contracts --format raw-data-format.xlsx
 ```
 
-It prints a short summary and the path of `review.xlsx`. The workbook goes in a new
-`Risk Program_review_<date-time>` folder next to the ZIP; add `--out C:\RiskWork\review1` to
-put it somewhere else. The ZIP itself is never changed.
+- `contracts` is the folder holding `Physical Contracts`, `Financial Contracts` and
+  `Evergreen Contracts`. A ZIP file works too.
+- `--format` points at the firm's format file. Its first-row headers decide the output
+  columns, so a changed template is followed.
+- Our company is taken to be **Kingston Marketing**. Add `--us "<name>"` only if
+  confirmations use a different name.
+- The output goes in a new `contracts_review_<date-time>` folder next to the source (or
+  `--out <folder>`). Nothing in the source is changed.
 
-## Output in the firm's raw-data-format
+## What you get
 
-Point the review at the firm's format file, and give our company name as it appears on
-confirmations:
-
-```powershell
-.\.venv\Scripts\riskparse review contracts --format raw-data-format.xlsx --us "<our company name>"
-```
-
-- `raw-data.xlsx` (in the output folder): **only** the firm's format, with the same headers as
-  `raw-data-format.xlsx` and one row per document. Values are copied as written. These are
-  proposals: verify them before pasting into the library.
-- In `review.xlsx`, the `raw-data-evidence` sheet shows, for every filled cell, the exact
-  location in the source document and any other candidate values found there.
-- `--us` lets the review tell which party is the counterparty when a confirmation only says
-  Buyer and Seller. Without it, Counterparty stays blank unless the document has a
-  counterparty label.
-- Without `--format`, the built-in copy of the 14 columns is used.
-
-## What's in the workbook
+**`raw-data.xlsx`**
 
 | Sheet | What it shows |
 | --- | --- |
-| **Summary** | How many documents per folder (Physical / Financial / Evergreen), file type and status, plus groups of documents that share a layout |
-| **Documents** | One row per document (email attachments get their own row, linked to the email): status, pages, warnings, SHA-256 |
-| **Text** | Every readable line or cell, with where it came from (`p2:L14` = page 2, line 14; `Confirm!B7` = sheet and cell; `body:L4` = email body line 4). Use the filter to look at one document |
-| **Fields** | **Proposed** trade fields (trade date, deal reference, buyer, seller, price, quantity, unit, delivery point, start/end dates...) found as "label → value" pairs, each with its location. Values are copied exactly as written. The last three columns are for Risk: mark each row OK or WRONG, write the correct value, and initial it |
-| **Labels** | Every label found, per layout group, with how many documents use it and what it maps to. **No values** |
-| **Issues** | What needs a human look: scanned PDFs (`NEEDS_OCR`), password-protected files, embedded emails, refused or corrupt ZIP files, hidden sheets |
+| **raw-data-format** | The firm's columns, one row per trade; dates as dates, numbers as numbers |
+| **checks** | Per trade: our side (BUY/SELL), source, broker or issuer, settlement currency, how the price is quoted, a swap's fixed price, location, every supporting document, anything to look at, and columns for Risk to mark the row OK or WRONG |
+
+**`review.xlsx`** holds the same two sheets, plus:
+- **evidence**: for every filled cell, the exact place in the document and the text it was read
+  from;
+- **documents**: which parser read each file;
+- **text**: all readable text;
+- **issues**.
+
+## How each confirmation family is read
+
+| Family | Recognised by | Notes |
+| --- | --- | --- |
+| Modern Commodities `Trade-Confirm-*.xlsx` | header row with Trade Number / Bid Legal Name / Offer Legal Name | one trade per row; an `UPDATED-` report replaces the earlier one, and the changes are listed |
+| One Exchange `Seller Confirmation for Deal *.pdf` | "BROKERED TRADE CONFIRMATION" | the index "Calendar average … WTI" is WTI CMA; settlement currency comes from Notes |
+| Marex `Canadian Crude_KM_*.pdf` | "Marex Reference" | start and end dates are the contract month |
+| Marex daily summary `*.xls` | Reference / Deal Date / Buy Company / Sell Company | the same trade as a Marex PDF: merged into one row, and disagreements flagged |
+| CalRock `*.msg` emails | a "Trade confirmation" block | forwarded emails work too |
+| National Bank of Canada swaps (ISDA) | "COMMODITY SWAP TRANSACTION" | the fixed-price payer is the buyer; the fixed price goes on the checks sheet because it is not a differential; the confirmation names no trader or grade |
+
+Column conventions:
+- **Counterparty** is always the other party.
+- **Seller** is the selling party's legal name, as written.
+- **Trader** is our trader.
+- **Fixed Differential** is the price differential to the index.
+
+A document that matches none of these layouts is listed as `UNRECOGNISED` and left out of
+raw-data; it is never guessed at. A new broker or layout needs a new parser: send a sample.
 
 ## What to send back
 
-Only the **summary printed in the window**: counts, layout groups and how many documents
-each field was found in. It contains no names, prices or text. Keep the workbook confidential;
-it holds the contract text.
-
-To improve the mapping, the label wording helps most. Print it in the window:
-
-```powershell
-.\.venv\Scripts\riskparse review contracts --labels
-```
-
-It lists unmapped label wording such as "Sold To" or "Nomination Deadline" with document counts,
-and no values. **Read it before sharing:** a "candidate" label in Excel is just text next to a
-number, so it could be a company or person name. Delete those lines, then paste the rest.
-
-A legacy `.xls` file is reported as `UNSUPPORTED`: open it in Excel, save it as `.xlsx` in
-the same folder, and run the review again.
-
-The next step uses those counts to build parsers for the most common layouts, turning the text
-into trade fields that Risk checks against each source document.
+The **summary printed in the window**: trade counts per family, things to look at, and filled
+cells per column. It contains no names or prices.
 
 ---
 

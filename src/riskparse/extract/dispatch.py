@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from riskparse.extract import msg, pdf, xlsx
+from riskparse.extract import msg, pdf, xls, xlsx
 from riskparse.extract.base import (
     FAILED,
     UNSUPPORTED,
@@ -17,7 +17,7 @@ EXTRACTORS: dict[str, tuple[Callable[..., ExtractionResult], str, str]] = {
     "PDF": (pdf.extract_pdf, pdf.NAME, pdf.VERSION),
     "XLSX": (xlsx.extract_xlsx, xlsx.NAME, xlsx.VERSION),
     "XLSM": (xlsx.extract_xlsx, xlsx.NAME, xlsx.VERSION),
-    "XLS": (xlsx.extract_xlsx, xlsx.NAME, xlsx.VERSION),   # reports UNSUPPORTED with a reason
+    "XLS": (xls.extract_xls, xls.NAME, xls.VERSION),
     "MSG": (msg.extract_msg, msg.NAME, msg.VERSION),
 }
 

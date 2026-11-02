@@ -1,122 +1,110 @@
-"""`riskparse review`: the one-command Step 1 workbook (synthetic data only)."""
+"""`riskparse review`: confirmations in, the firm's raw-data-format out (synthetic only)."""
 
 import zipfile
 
 import pytest
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
-from doc_fixtures import build_msg, build_pdf, build_xlsx
-from riskparse.review import ReviewError, build_review
+from confirm_fixtures import calrock_msg, isda_pdf, marex_pdf, marex_xls, modern_xlsx, ox_pdf
+from doc_fixtures import build_pdf
+from riskparse.rawformat import DEFAULT_HEADERS
+from riskparse.review import ReviewError, build_review, format_summary
 
-BASE = "Risk Program/1. Contracts/"
+BASE = "1. Contracts/"
 
 
 def _zip(tmp_path):
-    z = tmp_path / "Risk Program.zip"
+    z = tmp_path / "1. Contracts.zip"
     with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(BASE + "Physical Contracts/SYN_phys.pdf", build_pdf([[
-            "SYNTHETIC physical confirmation", "Buyer: Alpha", "Seller: Us", "Price: 2.50"]]))
-        zf.writestr(BASE + "Physical Contracts/SYN_scan.pdf", build_pdf([[]]))
-        zf.writestr(BASE + "Financial Contracts/SYN_swap.xlsx", build_xlsx())
-        zf.writestr(BASE + "Evergreen Contracts/SYN_evergreen.msg", build_msg(
-            body="=HYPERLINK(\"http://x\")\nSYNTHETIC value clause",
-            attachments=[("SYN_agreement.pdf",
-                          build_pdf([["SYNTHETIC evergreen agreement text"]]), 1),
-                         ("inner.msg", b"x", 5)]))
+        p = BASE + "Physical Contracts/"
+        zf.writestr(p + "Trade-Confirm-Buyer-90001-1.xlsx", modern_xlsx(number=90001))
+        zf.writestr(p + "Trade-Confirm-Seller-90002-1.xlsx",
+                    modern_xlsx(number=90002, side="Sell", product="LSB", volume=2500.0,
+                                updated="2026-10-06 11:11:00 AM"))
+        zf.writestr(p + "UPDATED-Trade-Confirm-Seller-90002-2.xlsx",
+                    modern_xlsx(number=90002, side="Sell", product="LSB", volume=4000.0,
+                                updated="2026-10-06 11:16:16 AM"))
+        zf.writestr(p + "Seller Confirmation for Deal 2099001.pdf", ox_pdf())
+        zf.writestr(p + "Canadian Crude_KM_119999001.pdf", marex_pdf())
+        zf.writestr(p + "Canadian_Crude_summary.xls", marex_xls())
+        zf.writestr(p + "CalRock Energy trade confirmation #82999001.msg", calrock_msg())
+        zf.writestr(BASE + "Financial Contracts/Kingston 181000001.pdf", isda_pdf())
+        zf.writestr(p + "random letter.pdf", build_pdf([["SYNTHETIC unrelated letter text"]]))
         zf.writestr("../escape.pdf", b"bad")
     return z
 
 
-def test_review_builds_one_workbook_from_the_zip(tmp_path):
-    z = _zip(tmp_path)
-    before = z.read_bytes()
-    r = build_review(z, tmp_path / "out")
-    assert z.read_bytes() == before                         # input untouched
-    wb = load_workbook(r.workbook)
-    assert wb.sheetnames == ["Summary", "Documents", "Text", "Fields", "Labels",
-                             "raw-data-format", "raw-data-evidence", "Issues"]
-    docs = list(wb["Documents"].iter_rows(min_row=2, values_only=True))
-    files = {row[2]: row for row in docs}
-    assert set(files) == {"SYN_phys.pdf", "SYN_scan.pdf", "SYN_swap.xlsx", "SYN_evergreen.msg",
-                          "SYN_agreement.pdf", "inner.msg"}
-    assert files["SYN_agreement.pdf"][3] == files["SYN_evergreen.msg"][0]   # attached_to
-    assert files["SYN_scan.pdf"][6] == "NEEDS_OCR"
-    assert files["SYN_phys.pdf"][4] == "PHYSICAL" and files["SYN_phys.pdf"][12]  # layout group
-    issues = {(row[0], row[1]) for row in wb["Issues"].iter_rows(min_row=2, values_only=True)}
-    assert ("../escape.pdf", "UNSAFE_PATH") in issues        # refused member is listed
-    assert any(kind == "NEEDS_OCR" for _, kind in issues)
-    assert any(kind == "ATTACHMENT_NOT_EXTRACTED" for _, kind in issues)
-
-
-def test_text_sheet_has_locations_and_never_formulas(tmp_path):
+def test_review_produces_one_row_per_trade_in_the_firm_format(tmp_path):
     r = build_review(_zip(tmp_path), tmp_path / "out")
-    ws = load_workbook(r.workbook)["Text"]
-    rows = list(ws.iter_rows(min_row=2))
-    by_loc = {(c[1].value, c[2].value): c[3] for c in rows}
-    assert by_loc[("SYN_phys.pdf", "p1:L4")].value == "Price: 2.50"
-    assert by_loc[("SYN_swap.xlsx", "Confirm!B2")].value == "2.65"
-    formula_like = by_loc[("SYN_evergreen.msg", "body:L1")]
-    assert formula_like.value.startswith("=HYPERLINK") and formula_like.data_type == "s"
+    assert len(r.trades) == 6           # 9 recognised docs: duplicate + amendment merged
+    wb = load_workbook(r.raw_data)
+    assert wb.sheetnames == ["raw-data-format", "checks"]
+    rows = list(wb["raw-data-format"].iter_rows(values_only=True))
+    assert list(rows[0]) == DEFAULT_HEADERS and len(rows) == 7
+    by_no = {row[0]: dict(zip(DEFAULT_HEADERS, row, strict=True)) for row in rows[1:]}
+    assert by_no["90002"]["Quantity"] == 4000            # amendment applied
+    assert by_no["2099001"]["Fixed Differential"] == -6.1
+    assert by_no["2099001"]["Trade Date"].year == 2026   # a real date, not text
+    assert by_no["167000001 / 181000001"]["Fixed Differential"] is None
 
 
-def test_review_of_a_folder_and_refusals(tmp_path):
+def test_checks_evidence_documents_and_issues(tmp_path):
+    r = build_review(_zip(tmp_path), tmp_path / "out")
+    wb = load_workbook(r.workbook)
+    assert wb.sheetnames == ["summary", "raw-data-format", "checks", "evidence", "documents",
+                             "text", "issues"]
+    checks = {row[0]: row for row in wb["checks"].iter_rows(min_row=2, values_only=True)}
+    assert checks["167000001 / 181000001"][6] == 106.12        # swap fixed price
+    assert "AMENDED" in checks["90002"][9]
+    assert "key terms agree" in checks["119999001"][9]
+    ev = list(wb["evidence"].iter_rows(min_row=2, values_only=True))
+    assert any(row[1] == "2099001" and row[2] == "Fixed Differential" and "p1:" in row[4]
+               for row in ev)
+    issues = {row[1] for row in wb["issues"].iter_rows(min_row=2, values_only=True)}
+    assert {"UNRECOGNISED", "UNSAFE_PATH"} <= issues
+    parsed_as = {row[2]: row[7] for row in wb["documents"].iter_rows(min_row=2,
+                                                                     values_only=True)}
+    assert parsed_as["random letter.pdf"] == "UNRECOGNISED"
+
+
+def test_summary_is_counts_only(tmp_path):
+    text = format_summary(build_review(_zip(tmp_path), tmp_path / "out"))
+    assert "Trades: 6" in text and "Unrecognised documents (not in raw-data): 1" in text
+    assert "SYN" not in text and "Libby" not in text and "-6.1" not in text
+
+
+def test_firm_format_file_headers_are_followed(tmp_path):
+    wb = Workbook()
+    for i, h in enumerate(["Contract #", "Quantity ", "Mystery Column"], start=1):
+        wb.active.cell(row=1, column=i, value=h)
+    wb.save(tmp_path / "raw-data-format.xlsx")
+    r = build_review(_zip(tmp_path), tmp_path / "out", format_path=tmp_path / "raw-data-format")
+    rows = list(load_workbook(r.raw_data)["raw-data-format"].iter_rows(values_only=True))
+    assert list(rows[0]) == ["Contract #", "Quantity ", "Mystery Column"]
+    assert r.format_unmapped == ["Mystery Column"]
+    assert "[header not recognised]" in format_summary(r)
+
+
+def test_refusals(tmp_path):
     folder = tmp_path / "contracts"
-    (folder / "Physical Contracts").mkdir(parents=True)
-    (folder / "Physical Contracts" / "a.pdf").write_bytes(build_pdf([["SYNTHETIC text line"]]))
-    r = build_review(folder, tmp_path / "out")
-    assert len(r.documents) == 1
+    folder.mkdir()
+    build_review(folder, tmp_path / "out")
     from riskparse.fswalk import UnsafeOutputError
     with pytest.raises(UnsafeOutputError):
-        build_review(folder, tmp_path / "out")              # never overwrites
+        build_review(folder, tmp_path / "out")
     with pytest.raises(UnsafeOutputError):
-        build_review(folder, folder / "inside")             # never writes into the source
+        build_review(folder, folder / "inside")
     junk = tmp_path / "x.txt"
     junk.write_text("x")
     with pytest.raises(ReviewError):
         build_review(junk, tmp_path / "out2")
 
 
-def test_cli_review_default_output_next_to_source(tmp_path, capsys):
+def test_cli(tmp_path, capsys):
     from riskparse.cli import main
     z = _zip(tmp_path)
     assert main(["review", str(z)]) == 0
     out = capsys.readouterr().out
-    assert "Open this workbook:" in out and "document(s)" in out
-    made = [p for p in tmp_path.iterdir() if p.name.startswith("Risk Program_review_")]
-    assert len(made) == 1 and (made[0] / "review.xlsx").is_file()
-
-
-def test_fields_and_labels_sheets(tmp_path):
-    r = build_review(_zip(tmp_path), tmp_path / "out")
-    wb = load_workbook(r.workbook)
-    fields = [row for row in wb["Fields"].iter_rows(min_row=2, values_only=True)]
-    phys = {row[3]: row for row in fields if row[1] == "SYN_phys.pdf"}
-    assert phys["price"][5] == "2.50" and phys["price"][6] == "p1:L4"
-    assert phys["buyer"][5] == "Alpha" and phys["seller"][5] == "Us"
-    assert all(row[8] is None for row in fields)            # Risk check columns left blank
-    labels = list(wb["Labels"].iter_rows(min_row=2, values_only=True))
-    assert labels and all(len(row) == 5 for row in labels)
-    assert not any("2.50" in str(cell) or "Alpha" in str(cell) for row in labels for cell in row)
-
-
-def test_summary_reports_field_coverage(tmp_path):
-    from riskparse.review import format_summary
-    text = format_summary(build_review(_zip(tmp_path), tmp_path / "out"))
-    assert "Proposed fields" in text and "price" in text
-    assert "Alpha" not in text and "2.50" not in text     # counts only
-
-
-def test_summary_has_per_layout_matrix_without_content(tmp_path):
-    from riskparse.review import format_summary
-    text = format_summary(build_review(_zip(tmp_path), tmp_path / "out"))
-    assert "Key fields by layout group" in text and "tdate" in text and "party" in text
-    assert "SYN_" not in text and "Alpha" not in text
-
-
-def test_cli_labels_flag_prints_wording_without_values(tmp_path, capsys):
-    from riskparse.cli import main
-    z = _zip(tmp_path)
-    assert main(["review", str(z), "--out", str(tmp_path / "o"), "--labels"]) == 0
-    out = capsys.readouterr().out
-    assert "Unmapped labels" in out and "CHECK BEFORE SHARING" in out
-    assert "2.50" not in out and "Alpha" not in out
+    assert "Trades: 6" in out and "raw-data (your format + checks):" in out
+    assert main(["review", str(z), "--format", str(tmp_path / "nope.xlsx")]) == 4
+    assert main(["review", str(z), "--us", "<our company name>"]) == 4

@@ -40,10 +40,13 @@ riskparse demo-smoke --workdir var/demo
 Windows/PowerShell equivalents are in `README.md`. Expected result: `334 passed` (the
 repository-hygiene tests skip outside a git checkout), and the demo ends with `SMOKE DEMO: PASS`.
 
-> **Step 1 entry point:** `riskparse review <zip or folder>` (`src/riskparse/review.py`,
-> `docs/STEP1_QUICKSTART.md`) builds one Excel workbook (Summary / Documents / Text / Issues),
-> with no config or database. The registration, database and audit pieces below are groundwork
-> for later stages; they are not required to run step 1.
+> **Step 1 entry point:** `riskparse review <zip or folder> --format raw-data-format.xlsx`
+> (`src/riskparse/review.py`, `docs/STEP1_QUICKSTART.md`). Family parsers in
+> `src/riskparse/confirms.py` (built from the real October confirmations) produce one row per
+> trade in the firm's format (`src/riskparse/rawformat.py`). They merge the Marex PDF with its
+> daily summary, apply `UPDATED-` amendments and flag anything to check. Tests use synthetic
+> replicas (`tests/confirm_fixtures.py`); real confirmations stay out of the repository. The
+> registration, database and audit pieces below are groundwork for later stages.
 
 ## 3. Code map and responsibilities
 
