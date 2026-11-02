@@ -6,7 +6,7 @@ Reads every confirmation and writes the trades in the firm's ``raw-data-format``
 
 * **raw-data-format**: the firm's columns, one row per trade (dates as dates, numbers as
   numbers).
-* **checks**: per trade, our buy/sell, settlement currency, price quote unit, swap fixed
+* **checks**: per trade, our buy/sell, settlement currency, price quote unit, fixed
   price, source family, supporting documents and anything that needs a look (amendments,
   duplicates, missing values), with columns for Risk to mark each row OK or WRONG.
 
@@ -47,7 +47,7 @@ MAX_TEXT_ROWS = 1_000_000  # Excel's limit is 1,048,576 rows per sheet
 DOC_COLUMNS = ["doc", "folder", "file", "attached_to", "folder_class", "type", "status",
                "parsed_as", "trades", "pages", "sheets", "warnings", "sha256", "path"]
 CHECK_COLUMNS = ["Contract #", "Our side", "Source", "Broker / issuer", "Settlement currency",
-                 "Price quoted in", "Swap fixed price", "Location", "Documents",
+                 "Price quoted in", "Fixed price", "Location", "Documents",
                  "Needs attention", "Risk check (OK/WRONG)", "Comment", "Checked by"]
 _CHECK_WIDTHS = [22, 8, 24, 22, 10, 10, 10, 26, 60, 70, 14, 24, 12]
 
@@ -162,9 +162,27 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     result.trades = merge_trades(result.parsed)
     result.names = _name_rows(result.parsed, nmap)
     apply_name_map(result.trades, nmap)
+    _price_flags(result)
     _write_raw_data(result)
     _write_review(result, text_rows, src)
     return result
+
+
+def _price_flags(result: ReviewResult) -> None:
+    has_fixed = any(attr_for(h) == "fixed_price" for h in result.format_headers)
+    for t in result.trades:
+        if t.fixed_price is None:
+            continue
+        if not has_fixed:
+            t.flags.append(f"fixed price {_num(t.fixed_price)} is on the checks sheet only: the "
+                           "format has no Fixed Price column")
+        if t.price_unit and not t.price_unit.upper().startswith("USD"):
+            t.flags.append(f"price in {t.price_unit}: fixed price {_num(t.fixed_price)} is "
+                           "not in USD")
+
+
+def _num(v) -> str:
+    return format(v.normalize(), "f") if hasattr(v, "normalize") else str(v)
 
 
 def _add(result: ReviewResult, text_rows: list, doc_no: str, folder: str, name: str,
@@ -279,7 +297,9 @@ def _write_review(result: ReviewResult, text_rows: list, src: Path) -> None:
 
 
 _FLAG_KINDS = (("swap: no trader", "swap: no trader named on the confirmation"),
-               ("swap fixed price", "swap: fixed price kept on checks sheet, not a differential"),
+               ("fixed price", "fixed price on checks sheet only (no Fixed Price column)"),
+               ("price in", "price not quoted in USD"),
+               ("flat price", "flat price with no index (put in Fixed Price)"),
                ("AMENDED", "amendment applied (earlier version superseded)"),
                ("also in", "duplicate document merged into one trade"),
                ("trade date is after", "trade date after start date (balance-of-period?)"),

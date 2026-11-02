@@ -26,7 +26,7 @@ def modern_xlsx(*, number=90001, side="Buy", product="MID", price=-8.75, volume=
                 term="NOV-26", start="2026-11-01", end="2026-11-30",
                 executed="2026-10-02 08:59:46 AM", updated="2026-10-02 09:09:46 AM",
                 cpty="SYN Refining Inc.", our_trader="Libby Smith", their_trader="SYN Trader",
-                currency="USD", state="Finalized") -> bytes:
+                currency="USD", state="Finalized", basis="WTI CMA") -> bytes:
     from openpyxl import Workbook
     wb = Workbook()
     ws = wb.active
@@ -34,7 +34,7 @@ def modern_xlsx(*, number=90001, side="Buy", product="MID", price=-8.75, volume=
     ws.append(MODERN_HEADERS)
     buy = side == "Buy"
     row = {"Trade Number": number, "State": state, "Product": product, "Location": "Cromer",
-           "Pipeline/Terminal": "Enb T@S", "Price Basis": "WTI CMA", "Term": term,
+           "Pipeline/Terminal": "Enb T@S", "Price Basis": basis, "Term": term,
            "Term Start": start, "Term End": end, "Price": price, "Volume": volume,
            "Unit of Measure": "m3/month", "Executed Timestamp": executed,
            "Last Updated Timestamp": updated, "Trade Type": "Outright", "Side": side,

@@ -46,6 +46,21 @@ def test_review_produces_one_row_per_trade_in_the_firm_format(tmp_path):
     assert by_no["2099001"]["Fixed Differential"] == -6.1
     assert by_no["2099001"]["Trade Date"].year == 2026   # a real date, not text
     assert by_no["181000001"]["Fixed Differential"] is None
+    assert by_no["181000001"]["Fixed Price"] == 106.12    # swap flat price in its own column
+    assert by_no["2099001"]["Fixed Price"] is None
+    swap = next(t for t in r.trades if t.contract_no == "181000001")
+    assert not any("checks sheet only" in f for f in swap.flags)
+    assert any(f.startswith("price in CAD/bbl") for f in swap.flags)
+
+
+def test_format_without_fixed_price_column_flags_the_swap(tmp_path):
+    wb = Workbook()
+    wb.active.append(DEFAULT_HEADERS[:-1])                # the old 14-column format
+    wb.save(tmp_path / "old-format.xlsx")
+    r = build_review(_zip(tmp_path), tmp_path / "out", format_path=tmp_path / "old-format.xlsx")
+    swap = next(t for t in r.trades if t.contract_no == "181000001")
+    assert any("no Fixed Price column" in f for f in swap.flags)
+    assert "fixed price on checks sheet only" in format_summary(r)
 
 
 def test_checks_evidence_documents_and_issues(tmp_path):

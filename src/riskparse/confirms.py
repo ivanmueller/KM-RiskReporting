@@ -474,8 +474,6 @@ def parse_isda_swap(result, doc, name, us) -> list[Trade]:
     _assign_parties(t, fixed or "", floating or "", "", "", us, lf, lfl)
     t.trader = ""
     t.flags.append("swap: no trader named on the confirmation")
-    t.flags.append(f"swap fixed price {t.fixed_price} {t.price_unit} is not a differential; "
-                   "Fixed Differential left blank")
     bank = re.search(r"\b([A-Z][A-Za-z&. ]+Bank[A-Za-z ]*)\b", " ".join(x for _l, x in lines))
     t.broker = clean(bank[1]) if bank else ""
     return [t]
@@ -519,7 +517,7 @@ PARSERS = {"modern": parse_modern_xlsx, "ox": parse_ox_pdf, "marex_pdf": parse_m
 _SAME_TRADE_GROUP = {"Marex (PDF)": "marex", "Marex (daily summary xls)": "marex"}
 _PREFERENCE = {"Marex (PDF)": 0, "Marex (daily summary xls)": 1}
 _COMPARED = ("trade_date", "start_date", "end_date", "side", "quantity", "unit", "grade",
-             "primary_index", "fixed_differential", "currency")
+             "primary_index", "fixed_differential", "fixed_price", "currency")
 REQUIRED = ("contract_no", "trade_date", "start_date", "end_date", "counterparty", "seller",
             "side", "quantity", "unit", "primary_index", "currency")
 
@@ -531,7 +529,25 @@ def parse_document(result, file_type, doc, name, us=DEFAULT_US) -> tuple[str | N
     trades = PARSERS[fam](result, doc, name, tuple(us))
     for t in trades:
         t.documents.append(f"{doc} {name}")
+        _flat_price_check(t)
     return fam, trades
+
+
+_NO_INDEX = re.compile(r"^\s*(fixed|flat|outright)\b", re.I)
+
+
+def _flat_price_check(t: Trade) -> None:
+    """A price with no index is a flat (fixed) price, not a differential: move it."""
+    if t.fixed_differential is None or t.fixed_price is not None:
+        return
+    if t.primary_index and not _NO_INDEX.match(t.primary_index):
+        return
+    t.fixed_price = t.fixed_differential
+    t.fixed_differential = None
+    if "fixed_differential" in t.evidence:
+        t.evidence["fixed_price"] = t.evidence.pop("fixed_differential")
+    t.flags.append(f"flat price: no index on the confirmation, so {_fmt(t.fixed_price)} is "
+                   "treated as a Fixed Price, not a differential")
 
 
 def _fmt(v) -> str:

@@ -42,7 +42,7 @@ cd C:\RiskCode\KM-RiskReporting
 | Sheet | What it shows |
 | --- | --- |
 | **raw-data-format** | The firm's columns, one row per trade; dates as dates, numbers as numbers |
-| **checks** | Per trade: our side (BUY/SELL), source, broker or issuer, settlement currency, how the price is quoted, a swap's fixed price, location, every supporting document, anything to look at, and columns for Risk to mark the row OK or WRONG |
+| **checks** | Per trade: our side (BUY/SELL), source, broker or issuer, settlement currency, how the price is quoted, the fixed price, location, every supporting document, anything to look at, and columns for Risk to mark the row OK or WRONG |
 
 **`review.xlsx`** holds the same two sheets, plus:
 - **evidence**: for every filled cell, the exact place in the document and the text it was read
@@ -62,13 +62,19 @@ cd C:\RiskCode\KM-RiskReporting
 | Marex `Canadian Crude_KM_*.pdf` | "Marex Reference" | start and end dates are the contract month |
 | Marex daily summary `*.xls` | Reference / Deal Date / Buy Company / Sell Company | the same trade as a Marex PDF: merged into one row, and disagreements flagged |
 | CalRock `*.msg` emails | a "Trade confirmation" block | forwarded emails work too |
-| National Bank of Canada swaps (ISDA) | "COMMODITY SWAP TRANSACTION" | the fixed-price payer is the buyer; the fixed price goes on the checks sheet because it is not a differential; the confirmation names no trader or grade |
+| National Bank of Canada swaps (ISDA) | "COMMODITY SWAP TRANSACTION" | the fixed-price payer is the buyer; the swap price goes in **Fixed Price**, never in Fixed Differential; the confirmation names no trader or grade |
 
 Column conventions:
 - **Counterparty** is always the other party.
 - **Seller** is the selling party's legal name, as written.
 - **Trader** is our trader.
-- **Fixed Differential** is the price differential to the index.
+- **Fixed Differential** is the price differential to the index (physical trades priced as
+  index + differential, e.g. WTI CMA -6.10).
+- **Fixed Price** is a flat (outright) price: a swap's fixed price, or a physical price on a
+  confirmation that names no index. A row has one or the other, never both. A price not
+  quoted in USD is flagged (one October swap is CAD/bbl); see "Price quoted in" on the checks
+  sheet. If your format file has no Fixed Price column, the price stays on the checks sheet
+  and the row is flagged.
 
 - A swap's **Contract #** is the transaction number: the second number of the bank's reference
   ("167034481 / 181749496" gives 181749496). The full reference stays on the evidence sheet.

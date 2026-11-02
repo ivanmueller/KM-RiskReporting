@@ -185,3 +185,14 @@ def test_missing_required_values_are_flagged():
     _, [t] = _parse(ox_pdf(qty="see attached"), "PDF")
     [m] = merge_trades([t])
     assert any(f.startswith("missing:") and "quantity" in f for f in m.flags)
+
+
+def test_price_with_no_index_is_a_flat_price_not_a_differential():
+    _, [t] = _parse(modern_xlsx(price=72.5, basis=""), "XLSX")
+    assert (t.fixed_differential, t.fixed_price) == (None, Decimal("72.5"))
+    assert t.evidence["fixed_price"].startswith("Trade Report!")
+    assert any(f.startswith("flat price") for f in t.flags)
+    _, [f] = _parse(modern_xlsx(price=72.5, basis="Fixed"), "XLSX")
+    assert f.fixed_price == Decimal("72.5") and f.fixed_differential is None
+    _, [d] = _parse(modern_xlsx(price=-8.75), "XLSX")              # index: a differential
+    assert (d.fixed_differential, d.fixed_price) == (Decimal("-8.75"), None)
