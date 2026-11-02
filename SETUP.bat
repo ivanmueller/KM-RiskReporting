@@ -13,8 +13,8 @@ rem    Python  -> %LOCALAPPDATA%\KM-RiskReporting\python
 rem               (only if Python 3.11 - 3.13 is not already installed)
 rem    Git     -> %LOCALAPPDATA%\KM-RiskReporting\git
 rem               (only if Git is not already installed)
-rem    Program -> C:\RiskCode\KM-RiskReporting
-rem               (or the folder this file is in, if that is already a copy)
+rem    Program -> the folder you choose (default C:\RiskCode\KM-RiskReporting);
+rem               run from inside a copy, it updates that copy without asking
 rem ======================================================================
 
 set "REPO_URL=https://github.com/ivanmueller/KM-RiskReporting.git"
@@ -46,14 +46,40 @@ if not exist "%DL%" mkdir "%DL%"
 
 rem ---------------------------------------------------------------- 1
 echo [1/6] Program folder
+rem Run from inside an existing copy: update that copy, no question asked.
 set "APP=%HERE%"
 if exist "%APP%\.git\" if exist "%APP%\pyproject.toml" goto :app_dir_known
-set "APP=%INSTALL_DIR%"
+rem Otherwise ask where to install. The default is the last place used, if any.
+set "DEFAULT_APP=%INSTALL_DIR%"
+if exist "%TOOLS%\install-path.txt" set /p DEFAULT_APP=<"%TOOLS%\install-path.txt"
+:ask_app_dir
+echo.
+echo       Where should the program be installed?
+echo       Press Enter for: %DEFAULT_APP%
+echo       or type or paste another folder, for example D:\Work\KM-RiskReporting
+set "ANSWER=%DEFAULT_APP%"
+set /p "ANSWER=      Folder: "
+set "ANSWER=%ANSWER:"=%"
+if "%ANSWER%"=="" set "ANSWER=%DEFAULT_APP%"
+for %%I in ("%ANSWER%") do set "APP=%%~fI"
+rem a drive such as D:\ gets its own subfolder; otherwise drop a trailing backslash
+if "%APP:~1%"==":\" set "APP=%APP%KM-RiskReporting"
+if "%APP:~-1%"=="\" set "APP=%APP:~0,-1%"
+rem an existing folder that is not a copy of the program and not empty: install inside it
+if exist "%APP%\.git\" goto :confirm_app_dir
+if not exist "%APP%\" goto :confirm_app_dir
+dir /b /a "%APP%" 2>nul | findstr . >nul
+if not errorlevel 1 set "APP=%APP%\KM-RiskReporting"
+:confirm_app_dir
+echo.
+echo       The program will be in: %APP%
+choice /c YN /n /m "      Is that right? Press Y for yes or N to choose again: "
+if errorlevel 2 goto :ask_app_dir
 if exist "%APP%\" goto :app_dir_known
 mkdir "%APP%" 2>nul
 if exist "%APP%\" goto :app_dir_known
-set "APP=%USERPROFILE%\RiskCode\KM-RiskReporting"
-echo       C:\RiskCode cannot be created on this computer, so using your user folder.
+echo       That folder cannot be created - choose another one.
+goto :ask_app_dir
 :app_dir_known
 echo       %APP%
 
@@ -139,6 +165,7 @@ if errorlevel 1 goto :fail_pip
 
 rem ---------------------------------------------------------------- 6
 echo [6/6] Final check
+> "%TOOLS%\install-path.txt" echo %APP%
 if not exist "%APP%\contracts\" mkdir "%APP%\contracts"
 "%APP%\.venv\Scripts\riskparse.exe" review --help >nul 2>&1
 if errorlevel 1 goto :fail_check
@@ -262,7 +289,7 @@ goto :stop
 :fail_app_dir_not_empty
 echo.
 echo  SETUP STOPPED: %APP% already exists but is not a copy of the program.
-echo  Rename or move that folder, then run SETUP.bat again.
+echo  Run SETUP.bat again and choose another folder.
 goto :stop
 
 :fail_clone

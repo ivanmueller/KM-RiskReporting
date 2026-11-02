@@ -13,14 +13,14 @@ firm's **raw-data format**, one row per trade, with a checks sheet for Risk.
 
 **New computer:** download `SETUP.bat` from
 [GitHub](https://github.com/ivanmueller/KM-RiskReporting/blob/claude/risk-reporting-phase-1-x8u26q/SETUP.bat)
-(the "Download raw file" button), then double-click it. It installs the program into
-`C:\RiskCode\KM-RiskReporting`. If Windows says "Windows protected your PC", click
+(the "Download raw file" button), then double-click it. It asks where to install the program
+(press Enter for `C:\RiskCode\KM-RiskReporting`). If Windows says "Windows protected your PC", click
 **More info → Run anyway**.
 
 ## The folder
 
 ```text
-C:\RiskCode\KM-RiskReporting\
+C:\RiskCode\KM-RiskReporting\    (or the folder you chose)
   SETUP.bat                  install / update (double-click)
   RUN.bat                    process the contracts (double-click)
   contracts\                 YOU put the confirmations here     (never uploaded)

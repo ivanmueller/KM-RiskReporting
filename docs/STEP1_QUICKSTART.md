@@ -10,7 +10,10 @@ Double-click **`SETUP.bat`** (in `C:\RiskCode\KM-RiskReporting`, or downloaded f
 a new computer: see the README). It needs no administrator rights and nothing installed
 beforehand:
 
-1. finds the program folder (or downloads the program into `C:\RiskCode\KM-RiskReporting`);
+1. finds the program folder. Run from inside the program folder, it updates that copy. Run
+   from anywhere else (for example Downloads), it asks where to install: press Enter for
+   `C:\RiskCode\KM-RiskReporting` or type another folder, then confirm with Y. Next time it
+   suggests the folder you chose;
 2. uses Git if installed, otherwise downloads a private copy for your user;
 3. downloads the latest version of the program;
 4. uses Python 3.11 – 3.13 if installed, otherwise installs Python for your user only
