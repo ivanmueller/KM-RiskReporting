@@ -123,3 +123,28 @@ def test_cli(tmp_path, capsys):
     assert "Trades: 6" in out and "raw-data (your format + checks):" in out
     assert main(["review", str(z), "--format", str(tmp_path / "nope.xlsx")]) == 4
     assert main(["review", str(z), "--us", "<our company name>"]) == 4
+
+
+def test_default_output_goes_in_the_contracts_review_master_folder(tmp_path):
+    from datetime import datetime
+
+    from riskparse.review import default_out_dir
+    src = tmp_path / "contracts"
+    assert default_out_dir(src, datetime(2026, 11, 2, 14, 30, 12)) == \
+        tmp_path / "contracts-review" / "contracts_2026-11-02_143012"
+    z = _zip(tmp_path)
+    first = build_review(z)
+    assert first.out_dir.parent == tmp_path / "contracts-review"
+    assert first.raw_data.is_file() and first.workbook.is_file()
+
+
+def test_contracts_review_folder_is_git_ignored():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    if not shutil.which("git") or not (repo / ".git").exists():
+        pytest.skip("not a git checkout")
+    r = subprocess.run(["git", "check-ignore", "-q", "contracts-review/x_2026/notes.txt"],
+                       cwd=repo)
+    assert r.returncode == 0

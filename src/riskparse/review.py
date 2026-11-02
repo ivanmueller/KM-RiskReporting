@@ -94,6 +94,15 @@ def _put(ws, row: int, values: list) -> None:
             cell.number_format = "yyyy-mm-dd"
 
 
+REVIEW_ROOT = "contracts-review"
+
+
+def default_out_dir(src: Path, now: datetime | None = None) -> Path:
+    """``<source's folder>/contracts-review/<source name>_<yyyy-mm-dd_hhmmss>``: one master
+    folder that collects every run, one new folder per run."""
+    return src.parent / REVIEW_ROOT / f"{src.stem}_{(now or datetime.now()):%Y-%m-%d_%H%M%S}"
+
+
 def build_review(source: str | Path, out_dir: str | Path | None = None, *,
                  format_path: str | Path | None = None,
                  us: list[str] | None = None,
@@ -111,7 +120,7 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
         elif DEFAULT_MAP.is_file():
             nmap = load_name_map(DEFAULT_MAP)
     if out_dir is None:
-        out_dir = src.parent / f"{src.stem}_review_{datetime.now():%Y%m%d-%H%M%S}"
+        out_dir = default_out_dir(src)
     out = check_output_location(out_dir, *([src] if src.is_dir() else []))
     out.mkdir(parents=True)
     result = ReviewResult(out, out / "review.xlsx", out / "raw-data.xlsx",

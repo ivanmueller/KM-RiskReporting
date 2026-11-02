@@ -96,3 +96,7 @@ htmlcov/
 
 # Scratch output from independent code reviews
 review_scratch/
+
+# riskparse review outputs (contract details): never commit
+contracts-review/
+*_review_*/
