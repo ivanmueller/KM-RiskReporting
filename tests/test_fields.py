@@ -81,3 +81,29 @@ def test_coverage_counts_documents_with_a_value():
     a = _pdf(["SYNTHETIC", "Price: 1", "Volume: 2"])
     b = _pdf(["SYNTHETIC", "Price:", "Buyer: X"])
     assert coverage({"D1": a, "D2": b}) == {"price": 1, "quantity": 1, "buyer": 1}
+
+
+def test_known_labels_without_colon_sentence_and_table_forms():
+    r = extract_bytes(build_msg(body="Please confirm the following:\nContract Price 2.50 CAD/GJ\n"
+                                "Volume  5,000 GJ/d\nDelivery Point    AECO\n"
+                                "Start Date Nov 1, 2026\nPrice is subject to change"), "MSG")
+    f = {p.field: p for p in propose_fields(r)}
+    assert f["price"].value == "2.50 CAD/GJ" and f["price"].how == "no colon"
+    assert f["quantity"].value == "5,000 GJ/d"
+    assert f["delivery_point"].value == "AECO"
+    assert f["start_date"].value == "Nov 1, 2026"
+    assert all(p.value != "is subject to change" for p in propose_fields(r))
+
+
+def test_header_rows_are_not_paired():
+    props = _pdf(["SYNTHETIC", "Buyer    Seller"])
+    assert props == []
+
+
+def test_excel_candidate_labels_are_listed_unmapped():
+    props = _xlsx({"A1": "Date", "B1": "2026-10-05", "A2": "Sold To", "C2": "SYN Co 1",
+                   "A3": "Notes", "B3": "free text"})
+    got = {(p.field, p.label, p.how) for p in props}
+    assert ("(unmapped)", "Date", "cell right (candidate label)") in got
+    assert ("(unmapped)", "Sold To", "cell right (candidate label)") in got
+    assert not any(p.label == "Notes" for p in props)          # right cell is not value-like

@@ -289,3 +289,27 @@ _MATRIX = (("tdate", {"trade_date"}), ("ref", {"deal_reference"}),
            ("party", {"buyer", "seller", "counterparty"}), ("price", {"price", "price_index"}),
            ("qty", {"quantity"}), ("point", {"delivery_point"}), ("start", {"start_date"}),
            ("end", {"end_date"}))
+
+
+def format_unmapped_labels(result: ReviewResult, limit: int = 120) -> str:
+    """Unmapped label wording (digits masked) with document counts. No values.
+
+    Labels are field names such as "Sold To" or "Nomination Deadline"; still, read the
+    list before sharing it, since a label could contain a counterparty or person name.
+    """
+    seen: dict[tuple[str, str, str], set] = {}
+    by_doc = {d["doc"]: d for d in result.documents}
+    for doc_no, props in result.proposals.items():
+        for p in props:
+            if p.field == "(unmapped)":
+                kind = "candidate" if "candidate" in p.how else "label"
+                seen.setdefault((p.label_key, by_doc[doc_no]["type"], kind), set()).add(doc_no)
+    rows = sorted(seen.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    lines = ["", "Unmapped labels (wording only, digits shown as #, no values).",
+             "CHECK BEFORE SHARING: remove any line that contains a company or person name.",
+             f"  {'docs':>4}  {'type':<5} {'kind':<9} label"]
+    for (key, ftype, kind), docs_ in rows[:limit]:
+        lines.append(f"  {len(docs_):>4}  {ftype:<5} {kind:<9} {key}")
+    if len(rows) > limit:
+        lines.append(f"  ... {len(rows) - limit} more on the Labels sheet")
+    return "\n".join(lines)

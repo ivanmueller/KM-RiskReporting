@@ -113,6 +113,42 @@ def _looks_like_label(text: str) -> bool:
     return bool(_LABEL_COLON.match(text)) or map_label(text) != "(unmapped)"
 
 
+# Synonyms too short or too generic to trust without a colon ("to", "end", "term"...).
+_NO_COLON_EXCLUDED = {"to", "from", "end", "start", "deal", "ref", "delivery", "location",
+                      "period", "term", "index", "pricing", "payment", "settlement", "company",
+                      "client", "basis", "discount", "premium", "spread", "unit", "units",
+                      "product", "hub", "meter", "tenor", "reference", "customer"}
+_NO_COLON_SYNS = sorted((syn for syn in _LOOKUP if syn not in _NO_COLON_EXCLUDED and len(syn) >= 4),
+                        key=len, reverse=True)
+_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*[0-9]"
+_VALUE_START = re.compile(rf"^(?:[A-Za-z]{{3}}\s*)?[$€£]?\s*[-(]?[0-9]|^{_MONTH}", re.I)
+_KNOWN_NO_COLON = re.compile(
+    r"^\s*(?P<label>" + "|".join(re.escape(x) for x in _NO_COLON_SYNS) + r")"
+    r"(?:\s*\([^)]*\))?\s+(?P<value>\S.*)$", re.I)
+
+
+def _known_label_no_colon(text: str) -> tuple[str, str] | None:
+    """'Price 2.50 CAD/GJ' -> ('Price', '2.50 CAD/GJ') for known labels only.
+
+    The value must start like a number, an amount or a date, so sentences such as
+    'Price is subject to...' are not taken.
+    """
+    m = _KNOWN_NO_COLON.match(text)
+    if not m or not _VALUE_START.match(m["value"].strip()):
+        return None
+    label = text[: m.end("label")].strip()
+    rest = text[m.end("label"):].strip()
+    if rest.startswith("("):                      # keep "(CAD/GJ)" with the label
+        close = rest.find(")")
+        label, rest = f"{label} {rest[: close + 1]}", rest[close + 1:].strip()
+    return label, rest
+
+
+def _value_like(cell: tuple[str, str]) -> bool:
+    text, vtype = cell
+    return vtype in ("number", "date", "datetime") or bool(_DIGITS.search(text))
+
+
 def _is_label_cell(cell: tuple[str, str]) -> bool:
     text, vtype = cell
     return vtype == "text" and not _DIGITS.search(text) and _looks_like_label(text.strip())
@@ -122,15 +158,30 @@ def _from_lines(segments) -> list[FieldProposal]:
     out: list[FieldProposal] = []
     seq = [s for s in segments if s.kind in ("line", "body_line", "html_body_line")]
     for i, s in enumerate(seq):
-        for chunk in (c for c in _CHUNKS.split(s.text) if c.strip()):
+        chunks = [c for c in _CHUNKS.split(s.text) if c.strip()]
+        for j, chunk in enumerate(chunks):
             m = _LABEL_COLON.match(chunk)
             if not m:
+                # 'Price 2.50' in a sentence, or 'Price | 2.50' as two table chunks
+                pair = _known_label_no_colon(chunk)
+                # table form: a known label, a wide gap, then the value (any text)
+                if pair is None and map_label(chunk) != "(unmapped)" and j + 1 < len(chunks) \
+                        and normalize_label(chunk) not in _NO_COLON_EXCLUDED \
+                        and not _LABEL_COLON.match(chunks[j + 1]) \
+                        and map_label(chunks[j + 1]) == "(unmapped)":
+                    pair = (chunk.strip(), chunks[j + 1].strip())
+                if pair is not None:
+                    out.append(FieldProposal(map_label(pair[0]), pair[0],
+                                             normalize_label(pair[0]), pair[1], s.location,
+                                             "no colon"))
                 continue
             label, value = m["label"].strip(), m["value"].strip()
             how, loc = "same line", s.location
             if not value:
                 nxt = next((t for t in seq[i + 1: i + 3] if t.text.strip()), None)
-                if nxt is not None and not _LABEL_COLON.match(nxt.text.strip()):
+                if nxt is not None and not _LABEL_COLON.match(nxt.text.strip()) \
+                        and _known_label_no_colon(nxt.text.strip()) is None \
+                        and map_label(_CHUNKS.split(nxt.text.strip())[0]) == "(unmapped)":
                     value, how, loc = nxt.text.strip(), "next line", nxt.location
                 else:
                     how = "no value"
@@ -148,7 +199,22 @@ def _from_cells(segments) -> list[FieldProposal]:
                 s.text, s.meta.get("type", "text"))
     out: list[FieldProposal] = []
     for (sheet, row, col), (text, vtype) in sorted(grid.items()):
-        if vtype != "text" or not _looks_like_label(text.strip()):
+        if vtype != "text":
+            continue
+        if not _looks_like_label(text.strip()):
+            # Possible label we do not know yet (e.g. "Date", "Sold To"): short text with no
+            # digits and a value-like cell to its right. Listed as (unmapped) so the label
+            # list shows it; it is never mapped to a field automatically.
+            words = text.split()
+            if 0 < len(words) <= 5 and len(text) <= 40 and not _DIGITS.search(text):
+                right = next((grid[(sheet, row, col + dc)] for dc in (1, 2, 3)
+                              if (sheet, row, col + dc) in grid), None)
+                if right is not None and _value_like(right):
+                    dc = next(dc for dc in (1, 2, 3) if (sheet, row, col + dc) in grid)
+                    out.append(FieldProposal("(unmapped)", text.strip(),
+                                             normalize_label(text), right[0],
+                                             f"{sheet}!{get_column_letter(col + dc)}{row}",
+                                             "cell right (candidate label)"))
             continue
         cm = _LABEL_COLON.match(text)
         label = cm["label"].strip() if cm else text.strip()

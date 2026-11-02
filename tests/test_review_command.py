@@ -110,3 +110,12 @@ def test_summary_has_per_layout_matrix_without_content(tmp_path):
     text = format_summary(build_review(_zip(tmp_path), tmp_path / "out"))
     assert "Key fields by layout group" in text and "tdate" in text and "party" in text
     assert "SYN_" not in text and "Alpha" not in text
+
+
+def test_cli_labels_flag_prints_wording_without_values(tmp_path, capsys):
+    from riskparse.cli import main
+    z = _zip(tmp_path)
+    assert main(["review", str(z), "--out", str(tmp_path / "o"), "--labels"]) == 0
+    out = capsys.readouterr().out
+    assert "Unmapped labels" in out and "CHECK BEFORE SHARING" in out
+    assert "2.50" not in out and "Alpha" not in out

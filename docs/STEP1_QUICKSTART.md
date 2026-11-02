@@ -44,10 +44,15 @@ Only the **summary printed in the window**: counts, layout groups and how many d
 each field was found in. It contains no names, prices or text. Keep the workbook confidential;
 it holds the contract text.
 
-To improve the mapping, the **Labels** sheet helps most: it lists label wording such as
-"Contract Price" or "Daily Contract Quantity", with no values. Check it first for anything
-confidential (a label could contain a counterparty name), then paste the rows marked
-`(unmapped)`.
+To improve the mapping, the label wording helps most. Print it in the window:
+
+```powershell
+.\.venv\Scripts\riskparse review contracts --labels
+```
+
+It lists unmapped label wording such as "Sold To" or "Nomination Deadline" with document counts,
+and no values. **Read it before sharing:** a "candidate" label in Excel is just text next to a
+number, so it could be a company or person name. Delete those lines, then paste the rest.
 
 A legacy `.xls` file is reported as `UNSUPPORTED`: open it in Excel, save it as `.xlsx` in
 the same folder, and run the review again.

@@ -267,6 +267,9 @@ def cmd_review(args) -> int:
     from riskparse.review import build_review, format_summary
     result = build_review(args.source, args.out)
     print(format_summary(result))
+    if args.labels:
+        from riskparse.review import format_unmapped_labels
+        print(format_unmapped_labels(result))
     print(f"\nOpen this workbook: {result.workbook}")
     print("Share only the summary above (counts and layout groups). The workbook is "
           "confidential.")
@@ -346,6 +349,8 @@ def build_parser() -> argparse.ArgumentParser:
                                        "ZIP or folder, with its readable text (no setup, no DB)")
     rv.add_argument("source", help="the contracts ZIP file, or a folder")
     rv.add_argument("--out", help="new output folder (default: next to the source, timestamped)")
+    rv.add_argument("--labels", action="store_true",
+                    help="also print the unmapped label wording (no values) to share")
     rv.set_defaults(func=cmd_review)
 
     pf = sub.add_parser("profile-documents", help="count and size contract documents by "
