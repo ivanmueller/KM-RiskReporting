@@ -71,6 +71,11 @@ if not exist "%APP%\" goto :confirm_app_dir
 dir /b /a "%APP%" 2>nul | findstr . >nul
 if not errorlevel 1 set "APP=%APP%\KM-RiskReporting"
 :confirm_app_dir
+rem The program must be on this computer: on a network drive the environment takes
+rem far too long to build (or hangs), every run is slow, and it only works for one PC.
+if "%APP:~0,2%"=="\\" goto :network_app_dir
+net use %APP:~0,2% >nul 2>&1
+if not errorlevel 1 goto :network_app_dir
 echo.
 echo       The program will be in: %APP%
 choice /c YN /n /m "      Is that right? Press Y for yes or N to choose again: "
@@ -79,6 +84,12 @@ if exist "%APP%\" goto :app_dir_known
 mkdir "%APP%" 2>nul
 if exist "%APP%\" goto :app_dir_known
 echo       That folder cannot be created - choose another one.
+goto :ask_app_dir
+:network_app_dir
+echo.
+echo       %APP% is on a network drive. The program has to be installed on this
+echo       computer, for example C:\RiskCode\KM-RiskReporting - choose a folder on C:.
+set "DEFAULT_APP=%INSTALL_DIR%"
 goto :ask_app_dir
 :app_dir_known
 echo       %APP%

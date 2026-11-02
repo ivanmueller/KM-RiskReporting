@@ -13,7 +13,8 @@ beforehand:
 1. finds the program folder. Run from inside the program folder, it updates that copy. Run
    from anywhere else (for example Downloads), it asks where to install: press Enter for
    `C:\RiskCode\KM-RiskReporting` or type another folder, then confirm with Y. Next time it
-   suggests the folder you chose;
+   suggests the folder you chose. The folder must be on this computer: a network drive
+   (such as L:) is refused, because building the environment there is very slow or hangs;
 2. uses Git if installed, otherwise downloads a private copy for your user;
 3. downloads the latest version of the program;
 4. uses Python 3.11 – 3.13 if installed, otherwise installs Python for your user only
@@ -136,6 +137,7 @@ Brokers spell the same company in different ways ("Secure" vs "SECURE", "Inc" vs
 | --- | --- |
 | "Windows protected your PC" | **More info → Run anyway** (the file came from the internet). |
 | SETUP stops at Git, Python or packages | The computer is blocking a download (github.com, python.org or pypi.org). The message names it; ask IT to allow it, or to install Python 3.13 and Git for Windows, then run `SETUP.bat` again. |
+| SETUP sits at "[5/6] creating the program environment" for 15+ minutes | It was installed on a network drive. Close it, end `python.exe` in Task Manager, delete that folder, and run `SETUP.bat` again with a folder on C:. |
 | "The program is not set up yet" | Run `SETUP.bat` first. |
 | A column you expected is missing | Check the summary: its first line names the build, and the `Format:` line names the format file used. Run `SETUP.bat` to update. |
 | A company is `NOT IN MAP` | Add it to `config\counterparty_map.csv` and run again. |
