@@ -264,7 +264,14 @@ def cmd_extract(args) -> int:
 
 
 def cmd_review(args) -> int:
+    from riskparse.rawformat import read_format_headers
     from riskparse.review import build_review, format_summary
+    if args.format:
+        read_format_headers(args.format)        # fail fast, before anything is written
+    if any("<" in u or ">" in u for u in args.us):
+        print("--us still contains the placeholder text; replace it with our company's "
+              "name as it appears on confirmations", file=sys.stderr)
+        return 4
     result = build_review(args.source, args.out, format_path=args.format, us=args.us)
     print(format_summary(result))
     if args.labels:
@@ -404,8 +411,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"evidence check failed: {exc}", file=sys.stderr)
             return 5
         from riskparse.fswalk import UnsafeOutputError
+        from riskparse.rawformat import FormatFileError
         from riskparse.review import ReviewError
-        if isinstance(exc, ZipIntakeError | FileExistsError | UnsafeOutputError | ReviewError):
+        if isinstance(exc, ZipIntakeError | FileExistsError | UnsafeOutputError | ReviewError
+                      | FormatFileError):
             print(f"intake refused: {exc}", file=sys.stderr)
             return 4
         raise

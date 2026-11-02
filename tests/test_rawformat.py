@@ -111,3 +111,27 @@ def test_cli_format_and_us_options(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "raw-data-format: 1 row(s)" in out and "Counterparty" in out
     assert "SYN-001" not in out                                # counts only
+
+
+def test_format_path_variants_and_clear_errors(tmp_path, capsys):
+    import pytest
+
+    from riskparse.cli import main
+    from riskparse.rawformat import FormatFileError, resolve_format_path
+    wb = Workbook()
+    wb.active["A1"] = "Contract #"
+    folder = tmp_path / "raw-data-format"
+    folder.mkdir()
+    wb.save(folder / "raw-data-format.xlsx")
+    assert resolve_format_path(folder).name == "raw-data-format.xlsx"            # folder
+    assert resolve_format_path(folder / "raw-data-format").suffix == ".xlsx"    # no extension
+    with pytest.raises(FormatFileError, match="not found"):
+        resolve_format_path(tmp_path / "missing.xlsx")
+    contracts = tmp_path / "contracts"
+    contracts.mkdir()
+    assert main(["review", str(contracts), "--format", str(tmp_path / "nope.xlsx")]) == 4
+    assert "format file not found" in capsys.readouterr().err
+    assert not any(p.name.startswith("contracts_review_") for p in tmp_path.iterdir())
+    assert main(["review", str(contracts), "--format", str(folder),
+                 "--us", "<our company name>"]) == 4
+    assert "placeholder" in capsys.readouterr().err

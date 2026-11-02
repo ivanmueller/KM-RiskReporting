@@ -42,9 +42,40 @@ def _norm_header(h: str) -> str:
     return " ".join(str(h).strip().lower().split())
 
 
+class FormatFileError(ValueError):
+    """The firm's format workbook could not be found or read."""
+
+
+def resolve_format_path(path: str | Path) -> Path:
+    """Accept the workbook, the same name without ``.xlsx``, or a folder holding one workbook."""
+    p = Path(path)
+    if p.is_dir():
+        found = sorted(f for f in p.iterdir() if f.suffix.lower() in (".xlsx", ".xlsm")
+                       and not f.name.startswith("~$"))
+        if len(found) == 1:
+            return found[0]
+        names = ", ".join(f.name for f in found) or "none"
+        raise FormatFileError(f"{p} is a folder with {len(found)} Excel workbook(s) ({names}); "
+                              "pass the workbook itself with --format")
+    if p.is_file():
+        return p
+    for suffix in (".xlsx", ".xlsm"):
+        if p.with_name(p.name + suffix).is_file():
+            return p.with_name(p.name + suffix)
+    parent = p.parent if str(p.parent) else Path(".")
+    nearby = sorted(f.name for f in parent.glob("*") if "format" in f.name.lower()) \
+        if parent.is_dir() else []
+    hint = f" Similar names in {parent.resolve()}: {', '.join(nearby)}." if nearby else ""
+    raise FormatFileError(f"format file not found: {p}.{hint}")
+
+
 def read_format_headers(path: str | Path) -> list[str]:
     """Header row of the first sheet of the firm's format workbook."""
-    wb = load_workbook(path, read_only=True)
+    path = resolve_format_path(path)
+    try:
+        wb = load_workbook(path, read_only=True)
+    except Exception as exc:
+        raise FormatFileError(f"{path} could not be opened as an Excel workbook: {exc}") from exc
     try:
         ws = wb.worksheets[0]
         row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
@@ -52,7 +83,7 @@ def read_format_headers(path: str | Path) -> list[str]:
         wb.close()
     headers = [str(v) for v in row if v is not None and str(v).strip()]
     if not headers:
-        raise ValueError(f"{path}: first row of the first sheet has no column headers")
+        raise FormatFileError(f"{path}: first row of the first sheet has no column headers")
     return headers
 
 
