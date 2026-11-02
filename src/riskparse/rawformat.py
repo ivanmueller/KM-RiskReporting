@@ -17,6 +17,9 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
+# the firm's format file, kept with the counterparty map; --format overrides it
+DEFAULT_FORMAT = Path("config") / "raw-data-format.xlsx"
+
 DEFAULT_HEADERS = ["Contract #", "Trade Date", "Start Date", "End Date", "Term", "Trader",
                    "Counterparty", "Seller", "Quantity", "Unit", "Grade", "Primary Index",
                    "Secondary Index", "Fixed Differential", "Fixed Price", "Currency"]

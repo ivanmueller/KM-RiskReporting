@@ -50,6 +50,8 @@
 !inventory/templates/inventory_Open_Questions.csv
 # ...and the counterparty master-name map Risk maintains (company names only, no trades)
 !config/counterparty_map.csv
+# ...and the firm's raw-data format (column headers only)
+!config/raw-data-format.xlsx
 
 # Completed inventories and any real source data
 /Contracts/

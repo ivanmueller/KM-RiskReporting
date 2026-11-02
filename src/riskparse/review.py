@@ -39,7 +39,15 @@ from riskparse.extract.dispatch import extract_bytes
 from riskparse.extract.profile import folder_class
 from riskparse.fswalk import check_output_location, walk_files
 from riskparse.names import DEFAULT_MAP, NameMap, apply_name_map, load_name_map
-from riskparse.rawformat import DEFAULT_HEADERS, attr_for, cell_value, read_format_headers
+from riskparse.project import project_file
+from riskparse.rawformat import (
+    DEFAULT_FORMAT,
+    DEFAULT_HEADERS,
+    attr_for,
+    cell_value,
+    read_format_headers,
+    resolve_format_path,
+)
 
 MAX_CELL = 32_000          # Excel's limit is 32,767 characters per cell
 MAX_TEXT_ROWS = 1_000_000  # Excel's limit is 1,048,576 rows per sheet
@@ -69,6 +77,7 @@ class ReviewResult:
     format_headers: list[str] = field(default_factory=list)
     format_unmapped: list[str] = field(default_factory=list)
     format_added: list[str] = field(default_factory=list)   # columns the tool added
+    format_file: Path | None = None                          # None: built-in columns
     name_map: NameMap | None = None
     names: list[list] = field(default_factory=list)      # names sheet rows
 
@@ -97,7 +106,7 @@ def _put(ws, row: int, values: list) -> None:
 
 REVIEW_ROOT = "contracts-data"
 # Bump with every change to the output, so a printed summary shows which code produced it.
-REVIEW_BUILD = "2026-11-02d (output folder: contracts-data)"
+REVIEW_BUILD = "2026-11-02e (format file in config folder)"
 
 
 def default_out_dir(src: Path, now: datetime | None = None) -> Path:
@@ -111,18 +120,21 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
                  us: list[str] | None = None,
                  names_path: str | Path | None = None,
                  use_names: bool = True) -> ReviewResult:
-    """``names_path`` defaults to ``config/counterparty_map.csv`` when that file exists."""
+    """``format_path`` defaults to ``config/raw-data-format.xlsx`` and ``names_path`` to
+    ``config/counterparty_map.csv``, looked for in the current folder, then the repository."""
     src = Path(source)
     if not src.exists():
         raise ReviewError(f"{src} does not exist")
+    if format_path is None:
+        format_path = project_file(DEFAULT_FORMAT)
     headers = read_format_headers(format_path) if format_path else list(DEFAULT_HEADERS)
     headers, added = _with_price_columns(headers)
     nmap = None
     if use_names:
+        if names_path is None:
+            names_path = project_file(DEFAULT_MAP)
         if names_path is not None:
             nmap = load_name_map(names_path)
-        elif DEFAULT_MAP.is_file():
-            nmap = load_name_map(DEFAULT_MAP)
     if out_dir is None:
         out_dir = default_out_dir(src)
     out = check_output_location(out_dir, *([src] if src.is_dir() else []))
@@ -130,7 +142,8 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     result = ReviewResult(out, out / "review.xlsx", out / "raw-data.xlsx",
                           format_headers=headers,
                           format_unmapped=[h for h in headers if attr_for(h) is None],
-                          format_added=added)
+                          format_added=added,
+                          format_file=resolve_format_path(format_path) if format_path else None)
     result.name_map = nmap
     us_names = tuple(us) if us else DEFAULT_US
 
@@ -320,6 +333,7 @@ def _write_review(result: ReviewResult, text_rows: list, src: Path) -> None:
 
 _FLAG_KINDS = (("swap: no trader", "swap: no trader named on the confirmation"),
                ("price currency", "price currency not stated"),
+               ("counterparty '", "counterparty not in the counterparty map"),
                ("flat price", "flat price with no index (put in Fixed Price)"),
                ("AMENDED", "amendment applied (earlier version superseded)"),
                ("also in", "duplicate document merged into one trade"),
@@ -362,7 +376,9 @@ def format_summary(result: ReviewResult) -> str:
     kinds = Counter(flag_kind(f) for t in result.trades for f in t.flags)
     for kind, n in kinds.most_common(8):
         lines.append(f"  {n:>3} x {kind}")
-    lines += ["", f"raw-data-format: filled cells per column (of {len(result.trades)} trades):"]
+    fmt = result.format_file.resolve() if result.format_file else "built-in columns"
+    lines += ["", f"Format: {fmt}",
+              f"raw-data-format: filled cells per column (of {len(result.trades)} trades):"]
     for h in result.format_headers:
         a = attr_for(h)
         filled = sum(1 for t in result.trades if a and cell_value(t, a) is not None)

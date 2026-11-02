@@ -4,39 +4,53 @@ One command reads every confirmation in the contracts folder or ZIP and writes t
 the firm's `raw-data-format`, **one row per trade**, with a checks sheet for Risk. No settings
 file, no database.
 
-## Once: install (PowerShell)
+## Once: install
 
-```powershell
-git clone https://github.com/ivanmueller/KM-RiskReporting.git C:\RiskCode\KM-RiskReporting
-cd C:\RiskCode\KM-RiskReporting
-git checkout claude/risk-reporting-phase-1-x8u26q
-py -3 -m venv .venv
-.\.venv\Scripts\pip install -r requirements\lock.txt
-.\.venv\Scripts\pip install -e . --no-deps
-```
+Double-click **`SETUP.bat`** (in `C:\RiskCode\KM-RiskReporting`, or downloaded from GitHub on
+a new computer: see the README). It needs no administrator rights and nothing installed
+beforehand:
 
-(Python 3.11 or newer. Already cloned? Run `git pull` in that folder instead of the first three
-lines. After a `git pull` that changes `requirements\lock.txt`, run the two `pip install`
-lines again.)
+1. finds the program folder (or downloads the program into `C:\RiskCode\KM-RiskReporting`);
+2. uses Git if installed, otherwise downloads a private copy for your user;
+3. downloads the latest version of the program;
+4. uses Python 3.11 – 3.13 if installed, otherwise installs Python for your user only
+   (the installer's signature is checked first);
+5. creates the program environment (`.venv`) and installs the packages;
+6. creates the `contracts` folder and checks that the program starts.
+
+**Run `SETUP.bat` again whenever you want the latest version.** It is safe to repeat.
 
 ## Each time: run it
 
+1. Put the confirmations in **`contracts`**: the `Physical Contracts`, `Financial Contracts`
+   and `Evergreen Contracts` folders, as they are.
+2. Double-click **`RUN.bat`**.
+
+The window prints a summary, and the new results folder opens:
+`contracts-data\contracts_<date>_<time>\` with `raw-data.xlsx` and `review.xlsx`. Earlier
+runs are kept, never overwritten. Nothing in `contracts` is changed, and neither folder is ever
+committed to git.
+
+- The output columns come from **`config\raw-data-format.xlsx`**: its first-row headers, in
+  order. Edit the headers there to change the columns. Fixed Price and Currency are added if a
+  format has Fixed Differential without them.
+- Company names go through **`config\counterparty_map.csv`** (below).
+- Our company is taken to be **Kingston Marketing**.
+
+<details><summary>The same from PowerShell, with options</summary>
+
 ```powershell
 cd C:\RiskCode\KM-RiskReporting
-.\.venv\Scripts\riskparse review contracts --format raw-data-format.xlsx
+.\.venv\Scripts\riskparse review contracts
 ```
 
-- `contracts` is the folder holding `Physical Contracts`, `Financial Contracts` and
-  `Evergreen Contracts`. A ZIP file works too.
-- `--format` points at the firm's format file. Its first-row headers decide the output
-  columns, so a changed template is followed.
-- Our company is taken to be **Kingston Marketing**. Add `--us "<name>"` only if
-  confirmations use a different name.
-- Every run goes in the **`contracts-data`** master folder next to the source, in a new
-  folder of its own named after the source and the time, e.g.
-  `contracts-data\contracts_2026-11-02_143012\raw-data.xlsx` and `review.xlsx`. Earlier
-  runs are kept, never overwritten. Use `--out <folder>` to write somewhere else. Nothing in
-  the source is changed, and `contracts-data` is never committed to git.
+- A ZIP file works instead of the `contracts` folder.
+- `--format <file>`: use another format file instead of `config\raw-data-format.xlsx`.
+- `--names <file>` / `--no-names`: another counterparty map, or none.
+- `--us "<name>"`: if confirmations name our company differently.
+- `--out <folder>`: write the results somewhere else.
+
+</details>
 
 ## What you get
 
@@ -108,9 +122,20 @@ Brokers spell the same company in different ways ("Secure" vs "SECURE", "Inc" vs
   listed as `NOT IN MAP` on the names sheet. To fix it, add a row and run again.
 - One spelling cannot map to two master names; the run stops and names the line.
 - Save as **CSV UTF-8** in Excel.
-- It is picked up automatically when you run from the repository folder. Use
-  `--names <file>` to point at a copy kept elsewhere, or `--no-names` to keep every name
-  exactly as written.
+- It is picked up automatically. Use `--names <file>` to point at a copy kept elsewhere, or
+  `--no-names` to keep every name exactly as written.
+- If you edit it and an update also changes it, `SETUP.bat` says the update could not be
+  applied and lists the file; your version keeps working. Tell the developer.
+
+## If something goes wrong
+
+| What you see | What to do |
+| --- | --- |
+| "Windows protected your PC" | **More info → Run anyway** (the file came from the internet). |
+| SETUP stops at Git, Python or packages | The computer is blocking a download (github.com, python.org or pypi.org). The message names it; ask IT to allow it, or to install Python 3.13 and Git for Windows, then run `SETUP.bat` again. |
+| "The program is not set up yet" | Run `SETUP.bat` first. |
+| A column you expected is missing | Check the summary: its first line names the build, and the `Format:` line names the format file used. Run `SETUP.bat` to update. |
+| A company is `NOT IN MAP` | Add it to `config\counterparty_map.csv` and run again. |
 
 ## What to send back
 

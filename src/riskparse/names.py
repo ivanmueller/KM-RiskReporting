@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DEFAULT_MAP = Path("config/counterparty_map.csv")
+DEFAULT_MAP = Path("config") / "counterparty_map.csv"
 COLUMNS = ("name_as_written", "master_name", "notes")
 PARTY_FIELDS = ("counterparty", "seller", "buyer")
 

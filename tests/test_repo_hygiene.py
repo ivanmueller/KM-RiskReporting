@@ -14,6 +14,8 @@ FORBIDDEN = {".pdf", ".msg", ".eml", ".tif", ".tiff", ".docx", ".doc", ".xls", "
 TEMPLATE_DIR = "inventory/templates/"
 # The counterparty name map is reference data the business keeps in the repo on purpose.
 NAME_MAP = "config/counterparty_map.csv"
+# The firm's raw-data format: one row of column headers, nothing else.
+FORMAT_FILE = "config/raw-data-format.xlsx"
 
 
 def _tracked():
@@ -32,7 +34,7 @@ def _expected_template_names():
 
 def test_no_confidential_file_types_tracked():
     """Every extension counts, case-insensitively: contract.PDF and contract.pdf.txt fail."""
-    allowed = _expected_template_names() | {NAME_MAP}
+    allowed = _expected_template_names() | {NAME_MAP, FORMAT_FILE}
     bad = [f for f in _tracked() if f not in allowed
            and {s.lower() for s in Path(f).suffixes} & FORBIDDEN]
     assert bad == []
@@ -92,3 +94,13 @@ def test_name_map_holds_only_names_and_notes():
         rows = list(csv.reader(fh))
     assert rows[0] == ["name_as_written", "master_name", "notes"]
     assert all(len(r) <= 3 for r in rows)
+
+
+def test_format_file_holds_only_the_header_row():
+    from openpyxl import load_workbook
+
+    from riskparse.rawformat import DEFAULT_HEADERS
+    wb = load_workbook(REPO / FORMAT_FILE)
+    assert len(wb.worksheets) == 1
+    rows = list(wb.active.iter_rows(values_only=True))
+    assert [list(r) for r in rows] == [DEFAULT_HEADERS]     # same as the built-in columns

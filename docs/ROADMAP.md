@@ -17,7 +17,7 @@ for a gate that needs real data or sign-off.
 - **Stage 1, Phase 1 (foundation):** done.
 - **Week 1 discovery:** in progress. The October trade zip has been received and needs to be inventoried.
 - **Engineering:** B1–B8 are done. The first Codex review's 26 findings are fixed, with migration `0004`; see `HANDOFF.md` §10 (334 tests). Contract **text extraction** (`.pdf`, `.xlsx`, `.msg` with attachments), `profile-documents` and layout fingerprints are built. Next: a second Codex review at `HEAD` (B9).
-- **Step 1 output:** `riskparse review contracts --format raw-data-format.xlsx` reads all six confirmation families (Modern Commodities, One Exchange, Marex PDF and summary, CalRock email, NBC ISDA swaps) and writes the firm's raw-data-format, one row per trade. October: 38 documents gave 36 trades, with 0 unrecognised. Next: Risk marks the checks sheet OK/WRONG.
+- **Step 1 output:** `RUN.bat` (`riskparse review contracts`, columns from `config/raw-data-format.xlsx`; install with `SETUP.bat`) reads all six confirmation families (Modern Commodities, One Exchange, Marex PDF and summary, CalRock email, NBC ISDA swaps) and writes the firm's raw-data-format, one row per trade. October: 38 documents gave 36 trades, with 0 unrecognised. Next: Risk marks the checks sheet OK/WRONG.
 
 ## NOW — next actions (in order)
 

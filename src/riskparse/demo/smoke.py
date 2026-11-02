@@ -329,7 +329,7 @@ def run_smoke(workdir: str | Path) -> dict:
     }
 
 
-# What the synthetic demo must produce. README and docs/phase1_scope.md document these;
+# What the synthetic demo must produce. docs/DEVELOPER.md and docs/phase1_scope.md document these;
 # `riskparse demo-smoke` fails unless every one holds (Codex review: smoke_false_pass).
 EXPECTED_STATUSES = {
     "SYN-T001": "MATCHED",

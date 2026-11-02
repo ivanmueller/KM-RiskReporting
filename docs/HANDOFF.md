@@ -4,7 +4,7 @@
 **Governing spec:** *Risk Reporting Automation — Project Game Plan v2.0 (2026-10-31)* (held outside the repo).
 
 This document is for the next developer or reviewer picking up the code. Read it together with
-`README.md` (setup/commands), `docs/phase1_scope.md` (what was built and why) and
+`docs/DEVELOPER.md` (setup/commands), `docs/phase1_scope.md` (what was built and why) and
 `docs/blockers.md` (what is waiting on other people).
 
 ---
@@ -37,10 +37,10 @@ ruff check src tests
 riskparse demo-smoke --workdir var/demo
 ```
 
-Windows/PowerShell equivalents are in `README.md`. Expected result: `381 passed` (the
+Windows/PowerShell equivalents are in `docs/DEVELOPER.md`. Expected result: `390 passed` (the
 repository-hygiene tests skip outside a git checkout), and the demo ends with `SMOKE DEMO: PASS`.
 
-> **Step 1 entry point:** `riskparse review <zip or folder> --format raw-data-format.xlsx`
+> **Step 1 entry point:** `riskparse review <zip or folder>` (Windows: `SETUP.bat`, `RUN.bat`; columns from `config/raw-data-format.xlsx`)
 > (`src/riskparse/review.py`, `docs/STEP1_QUICKSTART.md`). Family parsers in
 > `src/riskparse/confirms.py` (built from the real October confirmations) produce one row per
 > trade in the firm's format (`src/riskparse/rawformat.py`). They merge the Marex PDF with its
