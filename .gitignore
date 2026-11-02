@@ -98,5 +98,6 @@ htmlcov/
 review_scratch/
 
 # riskparse review outputs (contract details): never commit
+contracts-data/
 contracts-review/
 *_review_*/

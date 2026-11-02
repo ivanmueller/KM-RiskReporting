@@ -32,11 +32,11 @@ cd C:\RiskCode\KM-RiskReporting
   columns, so a changed template is followed.
 - Our company is taken to be **Kingston Marketing**. Add `--us "<name>"` only if
   confirmations use a different name.
-- Every run goes in the **`contracts-review`** master folder next to the source, in a new
+- Every run goes in the **`contracts-data`** master folder next to the source, in a new
   folder of its own named after the source and the time, e.g.
-  `contracts-review\contracts_2026-11-02_143012\raw-data.xlsx` and `review.xlsx`. Earlier
+  `contracts-data\contracts_2026-11-02_143012\raw-data.xlsx` and `review.xlsx`. Earlier
   runs are kept, never overwritten. Use `--out <folder>` to write somewhere else. Nothing in
-  the source is changed, and `contracts-review` is never committed to git.
+  the source is changed, and `contracts-data` is never committed to git.
 
 ## What you get
 

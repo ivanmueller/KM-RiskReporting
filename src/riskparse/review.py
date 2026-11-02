@@ -95,13 +95,13 @@ def _put(ws, row: int, values: list) -> None:
             cell.number_format = "yyyy-mm-dd"
 
 
-REVIEW_ROOT = "contracts-review"
+REVIEW_ROOT = "contracts-data"
 # Bump with every change to the output, so a printed summary shows which code produced it.
-REVIEW_BUILD = "2026-11-02c (adds Fixed Price + Currency columns)"
+REVIEW_BUILD = "2026-11-02d (output folder: contracts-data)"
 
 
 def default_out_dir(src: Path, now: datetime | None = None) -> Path:
-    """``<source's folder>/contracts-review/<source name>_<yyyy-mm-dd_hhmmss>``: one master
+    """``<source's folder>/contracts-data/<source name>_<yyyy-mm-dd_hhmmss>``: one master
     folder that collects every run, one new folder per run."""
     return src.parent / REVIEW_ROOT / f"{src.stem}_{(now or datetime.now()):%Y-%m-%d_%H%M%S}"
 

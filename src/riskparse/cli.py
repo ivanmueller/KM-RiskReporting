@@ -354,7 +354,7 @@ def build_parser() -> argparse.ArgumentParser:
                                        "ZIP or folder, with its readable text (no setup, no DB)")
     rv.add_argument("source", help="the contracts ZIP file, or a folder")
     rv.add_argument("--out", help="new output folder (default: a new timestamped folder inside "
-                         "contracts-review, next to the source)")
+                         "contracts-data, next to the source)")
     rv.add_argument("--format", help="the firm's raw-data-format workbook; its first-row "
                                      "headers define the output columns (default: built-in)")
     rv.add_argument("--names", help="counterparty master-name map (CSV); default: "
