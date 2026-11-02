@@ -9,6 +9,11 @@ no settings file, no database, no registration.
   status, pages, sheets, warnings, layout group and SHA-256.
 * **Text**: every line or cell of readable text, with its exact location (``p2:L14``,
   ``Confirm!B7``, ``body:L4``), ready to filter in Excel.
+* **Fields**: proposed trade fields (trade date, price, quantity, delivery point...) found
+  as "label -> value" pairs, each with its exact location and blank columns for Risk to
+  mark OK or wrong (see :mod:`riskparse.fields`).
+* **Labels**: every label found, per layout group, with **no values**, used to improve the
+  label mapping.
 * **Issues**: everything that needs a human look (scans, refused ZIP members, unreadable
   folders, hidden sheets, embedded emails).
 
@@ -35,6 +40,7 @@ from riskparse.evidence.hashing import file_type_for
 from riskparse.evidence.intake_zip import safe_extract
 from riskparse.extract.dispatch import extract_bytes
 from riskparse.extract.profile import folder_class, layout_key
+from riskparse.fields import SYNONYMS, coverage, propose_fields
 from riskparse.fswalk import check_output_location, walk_files
 
 MAX_CELL = 32_000          # Excel's limit is 32,767 characters per cell
@@ -56,6 +62,7 @@ class ReviewResult:
     documents: list[dict] = field(default_factory=list)
     issues: list[tuple[str, str, str]] = field(default_factory=list)   # (doc/file, kind, detail)
     text_rows: int = 0
+    proposals: dict[str, list] = field(default_factory=dict)          # doc -> [FieldProposal]
 
     def counts(self) -> Counter:
         return Counter((d["folder_class"], d["type"], d["status"]) for d in self.documents)
@@ -166,6 +173,7 @@ def _add(result: ReviewResult, text_rows: list, doc_no: str, folder: str, name: 
     for s in r.segments:
         if s.kind != "attachment":
             text_rows.append([doc_no, name, s.location, s.text])
+    result.proposals[doc_no] = propose_fields(r)
     return r
 
 
@@ -209,6 +217,32 @@ def _write_workbook(result: ReviewResult, text_rows: list, src: Path) -> None:
         _put(text, i, row)
     text.auto_filter.ref = text.dimensions
 
+    by_doc = {d["doc"]: d for d in result.documents}
+    fields_ws = _sheet(wb, "Fields", ["doc", "file", "layout_group", "field", "label as written",
+                                      "value as written", "location", "found", "risk check (OK/"
+                                      "WRONG)", "correct value", "checked by"],
+                       [8, 34, 14, 16, 30, 40, 16, 11, 16, 24, 14])
+    row = 2
+    for doc_no, props in result.proposals.items():
+        d = by_doc[doc_no]
+        for p in sorted(props, key=lambda p: (p.field == "(unmapped)", p.field)):
+            _put(fields_ws, row, [doc_no, d["file"], d["layout_group"], p.field, p.label,
+                                  p.value, p.location, p.how, None, None, None])
+            row += 1
+    fields_ws.auto_filter.ref = fields_ws.dimensions
+
+    labels_ws = _sheet(wb, "Labels", ["layout_group", "type", "label (digits masked)",
+                                      "mapped to", "documents"], [14, 6, 40, 16, 10])
+    label_docs: dict[tuple[str, str, str, str], set] = {}
+    for doc_no, props in result.proposals.items():
+        d = by_doc[doc_no]
+        for p in props:
+            key = (d["layout_group"] or "(none)", d["type"], p.label_key, p.field)
+            label_docs.setdefault(key, set()).add(doc_no)
+    for i, (key, docs_) in enumerate(sorted(label_docs.items()), start=2):
+        _put(labels_ws, i, [*key, len(docs_)])
+    labels_ws.auto_filter.ref = labels_ws.dimensions
+
     issues = _sheet(wb, "Issues", ["doc / file", "issue", "detail"], [30, 26, 120])
     for i, row in enumerate(result.issues, start=2):
         _put(issues, i, list(row))
@@ -226,4 +260,12 @@ def format_summary(result: ReviewResult) -> str:
               f"{len(result.issues)} issue(s)"]
     for (key, ftype), count in groups.most_common(10):
         lines.append(f"  layout {key:<14} {ftype:<5} {count}")
+    cov = coverage(result.proposals)
+    n = len(result.documents)
+    lines += ["", f"Proposed fields (documents with a value, out of {n}):"]
+    for name in SYNONYMS:
+        lines.append(f"  {name:<16} {cov.get(name, 0)}")
+    unmapped = {p.label_key for props in result.proposals.values() for p in props
+                if p.field == "(unmapped)"}
+    lines.append(f"  {len(unmapped)} distinct label(s) not mapped yet (see the Labels sheet)")
     return "\n".join(lines)

@@ -33,7 +33,7 @@ def test_review_builds_one_workbook_from_the_zip(tmp_path):
     r = build_review(z, tmp_path / "out")
     assert z.read_bytes() == before                         # input untouched
     wb = load_workbook(r.workbook)
-    assert wb.sheetnames == ["Summary", "Documents", "Text", "Issues"]
+    assert wb.sheetnames == ["Summary", "Documents", "Text", "Fields", "Labels", "Issues"]
     docs = list(wb["Documents"].iter_rows(min_row=2, values_only=True))
     files = {row[2]: row for row in docs}
     assert set(files) == {"SYN_phys.pdf", "SYN_scan.pdf", "SYN_swap.xlsx", "SYN_evergreen.msg",
@@ -83,3 +83,23 @@ def test_cli_review_default_output_next_to_source(tmp_path, capsys):
     assert "Open this workbook:" in out and "document(s)" in out
     made = [p for p in tmp_path.iterdir() if p.name.startswith("Risk Program_review_")]
     assert len(made) == 1 and (made[0] / "review.xlsx").is_file()
+
+
+def test_fields_and_labels_sheets(tmp_path):
+    r = build_review(_zip(tmp_path), tmp_path / "out")
+    wb = load_workbook(r.workbook)
+    fields = [row for row in wb["Fields"].iter_rows(min_row=2, values_only=True)]
+    phys = {row[3]: row for row in fields if row[1] == "SYN_phys.pdf"}
+    assert phys["price"][5] == "2.50" and phys["price"][6] == "p1:L4"
+    assert phys["buyer"][5] == "Alpha" and phys["seller"][5] == "Us"
+    assert all(row[8] is None for row in fields)            # Risk check columns left blank
+    labels = list(wb["Labels"].iter_rows(min_row=2, values_only=True))
+    assert labels and all(len(row) == 5 for row in labels)
+    assert not any("2.50" in str(cell) or "Alpha" in str(cell) for row in labels for cell in row)
+
+
+def test_summary_reports_field_coverage(tmp_path):
+    from riskparse.review import format_summary
+    text = format_summary(build_review(_zip(tmp_path), tmp_path / "out"))
+    assert "Proposed fields" in text and "price" in text
+    assert "Alpha" not in text and "2.50" not in text     # counts only
