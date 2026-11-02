@@ -140,22 +140,22 @@ def profile_folder(root: str | os.PathLike[str]) -> ProfileResult:
             if hashlib.sha256(data).hexdigest() != fp.sha256:
                 raise UnstableFileError(f"{p} changed while being profiled")
         except (OSError, UnstableFileError) as exc:
-            rows.append({**{c: "" for c in COLUMNS}, "relative_path": str(rel),
+            rows.append({**{c: "" for c in COLUMNS}, "relative_path": rel.as_posix(),
                          "file_name": p.name, "folder_class": fclass,
                          "file_type": file_type_for(p), "status": "FAILED",
                          "warnings": f"could not read: {exc}"})
             continue
-        row, result = _row(str(rel), "", p.name, fclass, fp.file_type, data)
+        row, result = _row(rel.as_posix(), "", p.name, fclass, fp.file_type, data)
         rows.append(row)
         for att in result.attachments:            # one level: attachments of an email
-            att_rel = f"{rel}!/{att.filename}"
+            att_rel = f"{rel.as_posix()}!/{att.filename}"
             if att.data is None:
                 rows.append({**{c: "" for c in COLUMNS}, "relative_path": att_rel,
-                             "parent": str(rel), "file_name": att.filename,
+                             "parent": rel.as_posix(), "file_name": att.filename,
                              "folder_class": fclass, "file_type": file_type_for(att.filename),
                              "status": "UNSUPPORTED", "warnings": att.note})
                 continue
-            att_row, _ = _row(att_rel, str(rel), att.filename, fclass,
+            att_row, _ = _row(att_rel, rel.as_posix(), att.filename, fclass,
                               file_type_for(att.filename), att.data)
             rows.append(att_row)
     return ProfileResult(rows)

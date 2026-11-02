@@ -8,6 +8,18 @@ import pytest
 from riskparse.config import ConfigError, DatabaseConfig, Settings, load_settings
 from riskparse.db.connection import build_url, create_db_engine
 
+
+def _can_symlink(tmp_path) -> bool:
+    """Windows only allows symlinks with Developer Mode or admin rights."""
+    probe = tmp_path / "_symlink_probe"
+    try:
+        probe.symlink_to(tmp_path, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return False
+    probe.unlink()
+    return True
+
+
 # --- settings_bypass (#5): the public connection boundary re-validates -------------
 
 
@@ -300,6 +312,8 @@ def test_unreadable_directory_reported_via_walk_errors(tmp_path, monkeypatch):
 
 
 def test_symlinked_directory_not_followed_and_reported(tmp_path):
+    if not _can_symlink(tmp_path):
+        pytest.skip("symbolic links not permitted for this user (Windows without Developer Mode)")
     from riskparse.inventory.scan import scan_folder
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -423,6 +437,8 @@ def test_folder_swapped_for_symlink_mid_extraction_cannot_redirect_writes(tmp_pa
 
 
 def test_destination_symlink_refused(tmp_path):
+    if not _can_symlink(tmp_path):
+        pytest.skip("symbolic links not permitted for this user (Windows without Developer Mode)")
     from riskparse.evidence.intake_zip import ZipIntakeError, safe_extract
     real = tmp_path / "real"
     real.mkdir()
@@ -529,3 +545,9 @@ def test_audit_verify_fails_when_pointer_row_deleted(tmp_path, capsys):
     eng.dispose()
     assert main(["--config", str(cfg), "audit-verify"]) == 1
     assert "exactly 1 pointer row" in capsys.readouterr().out
+
+
+def test_config_with_utf8_bom_loads(tmp_path):
+    p = tmp_path / "s.toml"
+    p.write_bytes(b"\xef\xbb\xbf" + b'[environment]\nname = "local"\n')
+    assert load_settings(p).environment == "local"

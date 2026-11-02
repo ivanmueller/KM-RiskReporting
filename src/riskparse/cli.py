@@ -26,8 +26,11 @@ def cmd_config_check(args) -> int:
     s = _settings(args)
     print(json.dumps(s.redacted(), indent=2))
     print("url:", describe_url(s))
-    if s.database.backend == "sqlite":
-        print("NOTE: sqlite is the local test adapter for synthetic data only.")
+    if s.database.backend == "sqlite" and s.environment == "test":
+        print("NOTE: sqlite with environment 'test' is for synthetic data only.")
+    elif s.database.backend == "sqlite":
+        print("NOTE: local SQLite is a provisional prototype on this controlled machine, not the "
+              "system of record. Keep the database file outside the repository.")
     return 0
 
 

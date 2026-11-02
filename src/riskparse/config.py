@@ -281,7 +281,8 @@ def load_settings(path: str | os.PathLike[str] | None = None) -> Settings:
         raise ConfigError(f"configuration file {candidate} is empty; refusing to fall back to "
                           "defaults")
     try:
-        data = tomllib.loads(raw.decode("utf-8"))
+        # utf-8-sig: Windows PowerShell 5.1 writes a BOM with "-Encoding utf8"
+        data = tomllib.loads(raw.decode("utf-8-sig"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
         raise ConfigError(f"configuration file {candidate} is not valid UTF-8 TOML: {exc}") \
             from exc
