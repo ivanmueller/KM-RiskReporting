@@ -268,4 +268,24 @@ def format_summary(result: ReviewResult) -> str:
     unmapped = {p.label_key for props in result.proposals.values() for p in props
                 if p.field == "(unmapped)"}
     lines.append(f"  {len(unmapped)} distinct label(s) not mapped yet (see the Labels sheet)")
+    lines += ["", "Key fields by layout group (documents with a value / documents in group):"]
+    lines.append(f"  {'layout':<14} {'type':<5} {'docs':>4} " + " ".join(f"{h:>6}" for h, _ in
+                                                                    _MATRIX))
+    groups_docs: dict[tuple[str, str], list[str]] = {}
+    for d in result.documents:
+        groups_docs.setdefault((d["layout_group"] or "(none)", d["type"]), []).append(d["doc"])
+    for (key, ftype), docs_ in sorted(groups_docs.items(), key=lambda kv: -len(kv[1])):
+        cells = []
+        for _h, names in _MATRIX:
+            n_found = sum(1 for doc in docs_ if any(
+                p.field in names and p.value for p in result.proposals.get(doc, [])))
+            cells.append(f"{n_found:>6}")
+        lines.append(f"  {key:<14} {ftype:<5} {len(docs_):>4} " + " ".join(cells))
     return "\n".join(lines)
+
+
+# Columns of the per-layout matrix: header -> canonical fields that count for it.
+_MATRIX = (("tdate", {"trade_date"}), ("ref", {"deal_reference"}),
+           ("party", {"buyer", "seller", "counterparty"}), ("price", {"price", "price_index"}),
+           ("qty", {"quantity"}), ("point", {"delivery_point"}), ("start", {"start_date"}),
+           ("end", {"end_date"}))

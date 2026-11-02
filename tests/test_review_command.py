@@ -103,3 +103,10 @@ def test_summary_reports_field_coverage(tmp_path):
     text = format_summary(build_review(_zip(tmp_path), tmp_path / "out"))
     assert "Proposed fields" in text and "price" in text
     assert "Alpha" not in text and "2.50" not in text     # counts only
+
+
+def test_summary_has_per_layout_matrix_without_content(tmp_path):
+    from riskparse.review import format_summary
+    text = format_summary(build_review(_zip(tmp_path), tmp_path / "out"))
+    assert "Key fields by layout group" in text and "tdate" in text and "party" in text
+    assert "SYN_" not in text and "Alpha" not in text
