@@ -2,8 +2,9 @@
 """The run's risk dashboard: one self-contained HTML page, and a temporary local server.
 
 ``write_dashboard`` turns a review result (parsed confirmations, the trade sheet check and
-the swaps) into ``dashboard.html`` in the run folder: key figures, checks that should all
-read OK, positions by delivery month and grade, the trade sheet reconciliation, the bank
+the swaps) into ``dashboard.html`` in the run folder: a narrow checks menu on the left (a
+checkmark when every check is OK, a flag with a count when not; it slides out to list each
+check, what failed and a link to it), key figures, positions by delivery month and grade, the trade sheet reconciliation, the bank
 swaps and the counterparties. Everything is embedded in the page (no internet, no
 libraries), so it also opens straight from the folder.
 
@@ -162,20 +163,49 @@ def build_data(result) -> dict:
     counterparties = sorted(({"name": k, **v} for k, v in cp.items()),
                             key=lambda c: -(c["bought"] + c["sold"]))
 
-    unrec = sum(1 for d in result.documents if d.get("parsed_as") == "UNRECOGNISED")
-    unmapped = sum(1 for r in result.names if r[2] == "NOT IN MAP")
-    checks = [["Documents no parser recognised", unrec, 0],
-              ["Company names not in the counterparty map", unmapped, 0]]
-    for src in sources:
-        k = src["kpi"]
-        checks += [
-            [f"Physical confirmations not on {src['named']}", k["not_on_sheet"], 0],
-            [f"Matched trades that differ from {src['named']}", k["differences"], 0],
-            [f"{src['label'][0].upper()}{src['label'][1:]} deals in the period without a "
-             "confirmation", k["missing"], 0]]
-    checks.append(["Bank swaps not identified as a roll or forward hedge",
-                   sum(1 for f in financial if f.kind == "SWAP"), 0])
-    checks = [{"check": c, "value": v, "target": tg, "ok": v == tg} for c, v, tg in checks]
+    checks = []
+
+    def check(text, items, hint="", jump=None):
+        checks.append({"check": text, "value": len(items), "target": 0, "ok": not items,
+                       "items": items[:40], "more": max(0, len(items) - 40), "hint": hint,
+                       "jump": jump})
+
+    check("Documents no parser recognised",
+          [d.get("file", "") for d in result.documents if d.get("parsed_as") == "UNRECOGNISED"],
+          "They are left out of raw-data. See the documents sheet in review.xlsx; a new "
+          "layout needs a new parser.")
+    check("Company names not in the counterparty map",
+          [r[0] for r in result.names if r[2] == "NOT IN MAP"],
+          "Add each spelling to config\\counterparty_map.csv and run again.")
+    for label, err in (getattr(result, "sheet_errors", {}) or {}).items():
+        check(f"{label[0].upper()}{label[1:]} read", [err],
+              "Check the trade sheet folder chosen in SETUP.bat.")
+    for i, src in enumerate(sources):
+        rows = src["recon"]
+        check(f"Physical confirmations not on {src['named']}",
+              [f"{r['contract']} - {r['counterparty']} {r['side']} {r['grade']} {r['month']}"
+               for r in rows if r["status"] == NOT_ON_SHEET],
+              "The desk has not recorded these deals, or recorded them under another "
+              "counterparty, grade or month.",
+              {"section": "reconsec", "source": i, "filter": NOT_ON_SHEET})
+        check(f"Matched trades that differ from {src['named']}",
+              [f"{r['contract']} - {'; '.join(r['differences'])}"
+               for r in rows if r["status"] == DIFFERENCES],
+              "Same deal on both, but a field differs: the confirmation or the trade sheet "
+              "needs correcting.",
+              {"section": "reconsec", "source": i, "filter": DIFFERENCES})
+        check(f"{src['label'][0].upper()}{src['label'][1:]} deals in the period without a "
+              "confirmation",
+              [f"{r['sheet_contract']} - {r['counterparty']} {r['side']} {r['grade']} "
+               f"{r['month']} ({r['sheet_broker'] or 'direct'})"
+               for r in rows if r["status"] in (NO_CONFIRMATION, NO_CONFIRMATION_DIRECT)],
+              "Ask the broker or counterparty for the confirmation, and add it to the "
+              "contracts folder.",
+              {"section": "reconsec", "source": i, "filter": "MISSING"})
+    check("Bank swaps not identified as a roll or forward hedge",
+          [f"{f.trade.contract_no} - {f.trade.side} {f.trade.term}"
+           for f in financial if f.kind == "SWAP"],
+          "Check what these swaps hedge.", {"section": "finsec"})
     return {
         "generated": f"{datetime.now():%Y-%m-%d %H:%M}",
         "position_date": f"{date.today():%B} {date.today().day}, {date.today():%Y}",
@@ -317,18 +347,59 @@ gap:8px;margin:4px 0}.bar .lab{white-space:nowrap;overflow:hidden;text-overflow:
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}
 ul.att{margin:0;padding-left:18px}ul.att li{margin:2px 0}
 .note{color:var(--muted);font-size:12px}.empty{color:var(--muted);font-style:italic}
+body{padding-left:60px}
+#rail{position:fixed;left:0;top:0;bottom:0;width:60px;background:var(--head);z-index:30;
+display:flex;flex-direction:column;align-items:center;padding-top:14px;
+border-right:4px solid var(--accent)}
+#railbtn{position:relative;width:44px;height:44px;border-radius:10px;border:0;cursor:pointer;
+display:grid;place-items:center;background:rgba(255,255,255,.08);color:#fff}
+#railbtn:hover,#railbtn[aria-expanded="true"]{background:rgba(255,255,255,.18)}
+#railbtn.ok svg{color:#5cc28c}#railbtn.bad svg{color:#ff8a7a}
+#railbtn .badge{position:absolute;top:-5px;right:-5px;min-width:18px;height:18px;
+border-radius:9px;background:#d92d20;color:#fff;font-size:11px;font-weight:700;
+display:grid;place-items:center;padding:0 4px}
+#rail .lab{color:#fff;opacity:.75;font-size:11px;margin-top:6px;letter-spacing:.04em}
+#panel{position:fixed;left:60px;top:0;bottom:0;width:min(420px,calc(100vw - 60px));
+background:var(--panel);border-right:1px solid var(--line);z-index:25;overflow-y:auto;
+transform:translateX(-105%);transition:transform .25s ease;box-shadow:6px 0 24px rgba(0,0,0,.18);
+padding:18px 18px 40px;visibility:hidden}
+#panel.open{transform:none;visibility:visible}
+#scrim{position:fixed;inset:0;background:rgba(10,15,25,.35);z-index:20;opacity:0;
+pointer-events:none;transition:opacity .25s}#scrim.open{opacity:1;pointer-events:auto}
+#panel h2{margin:0 0 2px;font-size:17px}#panel .close{float:right;border:0;background:none;
+font-size:22px;line-height:1;cursor:pointer;color:var(--muted)}
+.ck{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px}
+.ck.bad{border-color:var(--bad);background:transparent;color:var(--ink)}
+.ck.ok{background:transparent;color:var(--ink)}
+.ck .top{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:start}
+.ck .ic{width:20px;height:20px}.ck.ok .ic{color:var(--ok)}.ck.bad .ic{color:var(--bad)}
+.ck .val{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px;white-space:nowrap}
+.ck ul{margin:8px 0 0 30px;padding:0;font-size:12.5px}.ck li{margin:2px 0}
+.ck .hint{margin:6px 0 0 30px;color:var(--muted);font-size:12px}
+.ck button.go{margin:8px 0 0 30px;border:1px solid var(--line);background:var(--chip);
+color:var(--ink);border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit;font-size:12px}
+section.flash{animation:flash 1.6s ease}
+@keyframes flash{0%,40%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:none}}
+@media (max-width:600px){body{padding-left:48px}#rail{width:48px}#panel{left:48px;
+width:calc(100vw - 48px)}#railbtn{width:38px;height:38px}#rail .lab{font-size:8.5px}}
 </style>
 </head>
 <body>
+<nav id="rail" aria-label="Checks">
+<button id="railbtn" aria-expanded="false" aria-controls="panel" title="Checks"></button>
+<div class="lab">CHECKS</div>
+</nav>
+<div id="scrim"></div>
+<aside id="panel" aria-label="Checks" aria-hidden="true">
+<button class="close" id="panelclose" aria-label="Close">&times;</button>
+<h2>Checks</h2><p class="sub" id="panelsub"></p><div id="cklist"></div>
+</aside>
 <header>
 <div class="logo" id="logo"></div>
 <div><h1>KINGSTON MARKETING LIMITED | RISK DASHBOARD</h1><p id="meta"></p></div>
 </header>
 <main>
 <div class="kpis" id="kpis"></div>
-<section><h2>Checks (all should show OK)</h2><p class="sub">Each line compares a count with
-its target, like the checks block of the risk report.</p><div class="scroll"><table id="checks">
-</table></div></section>
 <div class="grid2">
 <section><h2>Confirmed physical position by delivery month (m3)</h2>
 <p class="sub">From the confirmations: bought, sold and net per month and grade, with the
@@ -338,10 +409,10 @@ volume-weighted differential (USD/bbl).</p><div id="confbars"></div>
 <p class="sub" id="sheetsub"></p><div id="sheetbars"></div>
 <div class="scroll"><table id="sheetpos"></table></div></section>
 </div>
-<section><h2>Trade sheet reconciliation</h2><div class="tabs" id="srctabs"></div>
+<section id="reconsec"><h2>Trade sheet reconciliation</h2><div class="tabs" id="srctabs"></div>
 <p class="sub" id="reconsub"></p><div class="chips" id="chips"></div>
 <div class="scroll"><table id="recon"></table></div></section>
-<section><h2>Financial swaps (bank)</h2><p class="sub">Not on the trade sheets by design. A
+<section id="finsec"><h2>Financial swaps (bank)</h2><p class="sub">Not on the trade sheets by design. A
 roll is two swaps (four legs) moving exposure from one month to the next; a forward hedge
 locks in a price months ahead.</p><div class="scroll"><table id="fin"></table></div>
 </section>
@@ -383,9 +454,40 @@ const netMain = D.conf_position.filter(p => p.month === main).reduce((a, p) => a
 if (main) kp.push([`Confirmed net ${main}`, num(netMain), `m3 (${num(netMain * D.bbl_per_m3)} bbl), long/(short)`]);
 $('kpis').innerHTML = kp.map(([l, v, s]) => `<div class="kpi"><span>${esc(l)}</span><b>${esc(v)}</b><small>${esc(s)}</small></div>`).join('');
 
-$('checks').innerHTML = '<tr><th>Check</th><th class="n">Value</th><th class="n">Target</th><th>Result</th></tr>' +
-  D.checks.map(c => `<tr><td>${esc(c.check)}</td><td class="n">${c.value}</td><td class="n">${c.target}</td><td><span class="pill ${c.ok ? 'ok' : 'bad'}">${c.ok ? 'OK' : 'CHECK'}</span></td></tr>`).join('') +
-  Object.entries(D.sheet_errors).map(([l, e]) => `<tr><td colspan="4"><span class="pill bad">${esc(l.toUpperCase())} NOT READ</span> ${esc(e)}</td></tr>`).join('');
+const ICON_OK = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5"/></svg>';
+const ICON_FLAG = '<svg class="ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 2a1 1 0 0 1 1 1v.6c1.3-.6 2.9-.9 4.6-.4 1.3.4 2.3 1.1 3.6 1.4 1.4.3 2.9.1 4.4-.7a1 1 0 0 1 1.4.9v9.4a1 1 0 0 1-.5.9c-1.9 1.1-3.9 1.4-5.8 1-1.5-.3-2.6-1-3.7-1.4-1.3-.4-2.6-.2-4 .5V21a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1z"/></svg>';
+const failing = D.checks.filter(c => !c.ok);
+const railbtn = $('railbtn'), panel = $('panel'), scrim = $('scrim');
+railbtn.className = failing.length ? 'bad' : 'ok';
+railbtn.innerHTML = (failing.length ? ICON_FLAG : ICON_OK).replace('class="ic"', 'width="26" height="26"') +
+  (failing.length ? `<span class="badge">${failing.length}</span>` : '');
+railbtn.title = failing.length ? `${failing.length} check(s) need a look` : 'All checks OK';
+$('panelsub').textContent = failing.length ? `${failing.length} of ${D.checks.length} need a look. Each compares a count with its target of 0, like the checks block of the risk report.` : `All ${D.checks.length} checks OK.`;
+$('cklist').innerHTML = [...failing, ...D.checks.filter(c => c.ok)].map((c, i) => `<div class="ck ${c.ok ? 'ok' : 'bad'}">
+  <div class="top">${c.ok ? ICON_OK : ICON_FLAG}<div>${esc(c.check)}</div><div class="val">${c.value} / ${c.target}</div></div>
+  ${c.ok ? '' : `<ul>${c.items.map(x => `<li>${esc(x)}</li>`).join('')}${c.more ? `<li class="note">and ${c.more} more</li>` : ''}</ul>
+  ${c.hint ? `<div class="hint">${esc(c.hint)}</div>` : ''}
+  ${c.jump ? `<button class="go" data-k="${D.checks.indexOf(c)}">Show me &rarr;</button>` : ''}`}</div>`).join('');
+function openPanel(open) {
+  panel.classList.toggle('open', open); scrim.classList.toggle('open', open);
+  railbtn.setAttribute('aria-expanded', open); panel.setAttribute('aria-hidden', !open);
+}
+railbtn.onclick = () => openPanel(!panel.classList.contains('open'));
+scrim.onclick = $('panelclose').onclick = () => openPanel(false);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') openPanel(false); });
+$('cklist').onclick = e => {
+  const b = e.target.closest('button.go'); if (!b) return;
+  const j = D.checks[+b.dataset.k].jump;
+  openPanel(false);
+  if (j.section === 'reconsec' && D.sources.length) {
+    src = j.source; filter = j.filter;
+    [...$('srctabs').children].forEach((x, i) => x.classList.toggle('on', i === src));
+    drawSource();
+  }
+  const sec = $(j.section);
+  sec.scrollIntoView({behavior: 'smooth', block: 'start'});
+  sec.classList.remove('flash'); void sec.offsetWidth; sec.classList.add('flash');
+};
 
 function monthBars(el, rows) {
   const by = {};
@@ -405,7 +507,7 @@ function posTable(el, rows, diffs) {
 monthBars('confbars', D.conf_position); posTable('confpos', D.conf_position, true);
 
 let src = 0, filter = 'IN PERIOD';
-const inGroup = (r, f) => f === 'ALL' || (f === 'IN PERIOD' ? !['OUTSIDE CONFIRMATION PERIOD', 'MONTH NOT ON THIS SHEET'].includes(r.status) : r.status === f);
+const inGroup = (r, f) => f === 'ALL' || (f === 'IN PERIOD' ? !['OUTSIDE CONFIRMATION PERIOD', 'MONTH NOT ON THIS SHEET'].includes(r.status) : f === 'MISSING' ? r.status.startsWith('NO CONFIRMATION') : r.status === f);
 function drawSource() {
   const S = D.sources[src];
   $('sheetposh').textContent = `${cap(S.label)}: position by delivery month (m3)`;
@@ -414,8 +516,9 @@ function drawSource() {
   const p = S.period;
   $('reconsub').textContent = `${S.files.join(', ')}: confirmations ${p ? `dated ${p[0]} to ${p[1]}` : ''} compared with its ${S.rows} rows. Matched on counterparty, side, grade and delivery month; then differential, trade date, broker and volume. ${S.standing} standing (Evergreen/Term) and ${S.internal} internal rows are not expected to have confirmations.` + (S.missing.length ? ` Not in the folder yet: ${S.missing.join(', ')}.` : '');
   const counts = {}; S.recon.forEach(r => counts[r.status] = (counts[r.status] || 0) + 1);
-  const chips = [['IN PERIOD', S.recon.filter(r => inGroup(r, 'IN PERIOD')).length], ...Object.entries(counts), ['ALL', S.recon.length]];
-  const label = s => s === 'ALL' ? 'Everything' : s === 'IN PERIOD' ? 'In the confirmation period' : s;
+  const missing = S.recon.filter(r => inGroup(r, 'MISSING')).length;
+  const chips = [['IN PERIOD', S.recon.filter(r => inGroup(r, 'IN PERIOD')).length], ...(missing ? [['MISSING', missing]] : []), ...Object.entries(counts), ['ALL', S.recon.length]];
+  const label = s => s === 'ALL' ? 'Everything' : s === 'IN PERIOD' ? 'In the confirmation period' : s === 'MISSING' ? 'All missing confirmations' : s;
   $('chips').innerHTML = chips.map(([s, n]) => `<button data-s="${esc(s)}" class="${s === filter ? 'on' : ''}">${esc(label(s))} (${n})</button>`).join('');
   drawRecon();
 }

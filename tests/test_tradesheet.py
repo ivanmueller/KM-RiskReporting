@@ -407,3 +407,20 @@ def test_validated_against_the_trading_tab_of_the_delivery_months_workbook(tmp_p
         t for t in r.trades if t.contract_no == "82999001").flags
     html, data = _dashboard_data(r.dashboard)
     assert [s["named"] for s in data["sources"]] == ["the monthly trade sheet"]
+
+
+def test_dashboard_checks_menu_lists_what_failed_and_where(tmp_path):
+    r = build_review(_zip(tmp_path), tmp_path / "out",
+                     trade_sheet=write_trade_sheet(tmp_path / "ts"))
+    html, data = _dashboard_data(r.dashboard)
+    assert 'id="rail"' in html and 'id="panel"' in html and 'id="checks"' not in html
+    by = {c["check"]: c for c in data["checks"]}
+    not_on = by["Physical confirmations not on the monthly trade sheet"]
+    assert not not_on["ok"] and not_on["items"][0].startswith("82999001 - ")
+    assert not_on["jump"] == {"section": "reconsec", "source": 0,
+                              "filter": "NOT ON TRADE SHEET"}
+    missing = by["Monthly trade sheet deals in the period without a confirmation"]
+    assert missing["value"] == 2 and missing["jump"]["filter"] == "MISSING"
+    assert by["Documents no parser recognised"]["items"] == ["random letter.pdf"]
+    assert by["Company names not in the counterparty map"]["ok"] in (True, False)
+    assert all(c["ok"] == (c["value"] == 0) for c in data["checks"])
