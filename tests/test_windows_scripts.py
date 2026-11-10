@@ -22,6 +22,8 @@ def test_every_goto_and_call_target_exists(name):
     labels = {m.lower() for m in re.findall(r"^:(\w+)\s*$", text, re.M)}
     targets = {m.lower() for m in re.findall(r"\b(?:goto|call)\s+:(\w+)", text, re.I)}
     assert targets - {"eof"} <= labels, targets - labels
+    every = [m.lower() for m in re.findall(r"^:(\w+)\s*$", text, re.M)]
+    assert len(every) == len(set(every)), "a label defined twice: goto jumps to the first"
 
 
 @pytest.mark.parametrize("name", SCRIPTS)
@@ -39,7 +41,10 @@ def test_scripts_point_at_files_that_exist():
     assert "requirements\\lock.txt" in setup and (REPO / "requirements" / "lock.txt").is_file()
     assert "github.com/ivanmueller/KM-RiskReporting.git" in setup
     run = (REPO / "RUN.bat").read_text()
-    assert "riskparse.exe\" review \"%CONTRACTS%\"" in run
+    assert "riskparse.exe\" review \"%CONTRACTS%\" --results \"%RESULTS%\" %TS_ARG%" in run
+    assert "riskparse.exe\" dashboard \"%RESULTS%\"" in run
+    for name in ("contracts-folder.txt", "results-folder.txt", "tradesheet-folder.txt"):
+        assert name in run and name in setup          # SETUP writes what RUN reads
 
 
 def test_gitattributes_keeps_bat_bytes():

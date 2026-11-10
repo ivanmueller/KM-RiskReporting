@@ -33,6 +33,9 @@ src/riskparse/
   cli.py, __main__.py       `riskparse` / `python -m riskparse`
   review.py                 step 1: `riskparse review` (confirmations -> raw-data.xlsx, review.xlsx)
   confirms.py               step 1: one parser per confirmation family, merge, amendments
+  tradesheet.py             step 1: reads the master trade sheet (any tab, by header name)
+  sheetcheck.py             step 1: confirmations vs trade sheet; bank swaps (roll / hedge)
+  dashboard.py              step 1: dashboard.html and the local (127.0.0.1) server
   rawformat.py, names.py    step 1: output columns; counterparty master names
   project.py                finds config/ files from any working folder
   config.py                 TOML config loading + safety validation

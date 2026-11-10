@@ -1,8 +1,9 @@
 # Step 1 quick start: confirmations in, raw-data-format out
 
-One command reads every confirmation in the contracts folder or ZIP and writes the trades in
-the firm's `raw-data-format`, **one row per trade**, with a checks sheet for Risk. No settings
-file, no database.
+One double-click reads every confirmation in the contracts folder, writes the trades in the
+firm's `raw-data-format` (**one row per trade**, with a checks sheet for Risk), checks them
+against the **master trade sheet**, sorts out the **bank swaps**, and shows a **risk dashboard**
+in the browser. No database.
 
 ## Once: install
 
@@ -15,10 +16,15 @@ beforehand:
    `C:\RiskCode\KM-RiskReporting` or type another folder, then confirm with Y. Next time it
    suggests the folder you chose. The folder must be on this computer: a network drive
    (such as L:) is refused, because building the environment there is very slow or hangs.
-   It then asks where the **contracts** are. This can be on the network, for example
-   `L:\Credit\Private\MTM\Risk Directory\Contracts`. The results go to a
-   `contracts-data` folder next to it. On later runs it shows the folder and asks Y to keep
-   it or N to choose another. That is the last question: the rest runs by itself;
+   It then asks for three folders, which can all be on the network (L:):
+   - **contracts**: where the confirmations are;
+   - **results**: each run makes a new dated folder in it, for example
+     `L:\...\Risk Directory\2. Raw Data`;
+   - **trade sheet**: the folder holding the master trade sheet, for example
+     `L:\...\Risk Directory\4. Trade Sheet` (type `none` to skip the check).
+
+   It shows all three and asks Y to confirm. On later runs it shows them and asks Y to keep
+   them or N to change them. Those are the last questions: the rest runs by itself;
 2. uses Git if installed, otherwise downloads a private copy for your user;
 3. downloads the latest version of the program;
 4. uses Python 3.11 – 3.13 if installed, otherwise installs Python for your user only
@@ -34,11 +40,13 @@ beforehand:
    `Physical Contracts`, `Financial Contracts` and `Evergreen Contracts` folders, as they are.
 2. Double-click **`RUN.bat`** in the program folder.
 
-The window prints a summary, and the new results folder opens: `contracts-data\<contracts
-folder name>_<date>_<time>\`, next to the contracts folder, with `raw-data.xlsx` and
-`review.xlsx`. Earlier runs are kept, never overwritten. Nothing in the contracts folder is
-changed. To use another contracts folder, run `SETUP.bat` again and press N at the contracts
-question.
+The window prints a summary. A new folder `<contracts folder name>_<date>_<time>` appears in
+the results folder with `raw-data.xlsx`, `review.xlsx` and `dashboard.html`; it opens, and the
+**dashboard** opens in your browser at `http://127.0.0.1:8765/`. The dashboard stays available
+while the RUN window is open; close the window when you are done (the page itself stays in
+the results folder and opens with a double-click). Earlier runs are kept, never overwritten.
+Nothing in the contracts folder or the trade sheet is changed. To change the folders, run
+`SETUP.bat` again and press N.
 
 - The output columns come from **`config\raw-data-format.xlsx`**: its first-row headers, in
   order. Edit the headers there to change the columns. Fixed Price and Currency are added if a
@@ -57,7 +65,11 @@ cd C:\RiskCode\KM-RiskReporting
 - `--format <file>`: use another format file instead of `config\raw-data-format.xlsx`.
 - `--names <file>` / `--no-names`: another counterparty map, or none.
 - `--us "<name>"`: if confirmations name our company differently.
-- `--out <folder>`: write the results somewhere else.
+- `--results <folder>`: the folder that collects every run (default: `contracts-data` next
+  to the contracts).
+- `--trade-sheet <folder or file>`: the master trade sheet to check against.
+- `--out <folder>`: write this run into exactly this new folder.
+- `riskparse dashboard <results folder>`: show the newest run's dashboard again.
 
 </details>
 
@@ -68,16 +80,63 @@ cd C:\RiskCode\KM-RiskReporting
 | Sheet | What it shows |
 | --- | --- |
 | **raw-data-format** | The firm's columns, one row per trade; dates as dates, numbers as numbers |
-| **checks** | Per trade: our side (BUY/SELL), source, broker or issuer, settlement currency, how the price is quoted, the fixed price, location, every supporting document, anything to look at, and columns for Risk to mark the row OK or WRONG |
+| **checks** | Per trade: our side (BUY/SELL), source, broker or issuer, settlement currency, how the price is quoted, the fixed price, location, every supporting document, anything to look at, the **trade sheet** result (e.g. `MATCHED 11824 (Nov CTS!row 50)`), and columns for Risk to mark the row OK or WRONG |
 
 **`review.xlsx`** holds the same two sheets, plus:
 - **evidence**: for every filled cell, the exact place in the document and the text it was read
   from;
+- **trade sheet**: every confirmation against the master trade sheet, and every trade sheet
+  deal with no confirmation (see below);
+- **financial**: the bank swaps, each marked ROLL (with its partner) or FORWARD HEDGE;
 - **names**: every company spelling found, the master name it became, and `NOT IN MAP` for
   any spelling the counterparty map does not have yet;
 - **documents**: which parser read each file;
 - **text**: all readable text;
 - **issues**.
+
+**`dashboard.html`**: the run as a page to read, in the style of the risk report: key
+figures, checks that should all read OK, confirmed and trade sheet positions by delivery
+month and grade (m3 and bbl, with weighted differentials), the reconciliation (filter by
+status), the bank swaps, counterparties and everything that needs attention. It needs no
+internet.
+
+## Checking against the master trade sheet
+
+The trade sheet folder holds exactly one workbook (any name, e.g. `October Trading 2026`).
+Every tab with the trading-schedule headers (`Counter Party`, `Buy/Sale`, `Volume`, `Grade`,
+`Inj Month`, plus `Date`, `Diff'l`, `Broker / Direct`, `Internal Contract`, ...) is read, in
+whatever column order; other tabs are skipped. The workbook is only read, never changed.
+
+**Physical deals** (Modern Commodities, One Exchange, Marex, CalRock) are on both. A
+confirmation and a trade sheet row are the same deal when the **counterparty, side, grade and
+delivery month** agree; the **differential, trade date and broker** then decide between
+candidates. Short names on the trade sheet (BP, CIOL, WCP, ...) are in the counterparty map.
+
+| Status | Meaning |
+| --- | --- |
+| `MATCHED` | Everything agrees |
+| `MATCHED - CHECK DIFFERENCES` | Same deal, but a differential, date, broker, currency, trader or volume differs: listed |
+| `NOT ON TRADE SHEET` | A confirmation the desk has not recorded |
+| `NO CONFIRMATION` | A trade sheet deal dated in the confirmations' date range with no confirmation (`(direct deal)` when it was not brokered) |
+| `OUTSIDE CONFIRMATION PERIOD` | A trade sheet deal dated outside that range: listed, not flagged |
+
+Standing agreements (Evergreen / Term rows) and internal rows (KM, opening inventory) are
+counted, not flagged.
+
+**Volumes:** buys agree exactly. Sales at Cromer are often lower on the trade sheet by the
+same percentage for every sale to the same counterparty in a month (for example 91% of the
+confirmed volume): the trade sheet holds the apportioned volume. A consistent percentage is a note; a
+one-off or a higher trade sheet volume is a difference to check. *(Please confirm this reading
+with the desk.)*
+
+**Bank swaps** (National Bank of Canada, ISDA) are not on the trade sheet by design:
+- **ROLL**: two swaps on the same day for the same volume, one buying and one selling
+  consecutive months: four legs (a fixed and a floating leg each), moving price exposure from
+  one month to the next. The financial sheet shows the pair and the spread between the two
+  fixed prices.
+- **FORWARD HEDGE**: a swap three or more months ahead of its trade date, e.g. fixing the
+  price of barrels bought at a fixed price from a producer.
+- **SWAP**: anything else: check what it hedges.
 
 ## How each confirmation family is read
 
@@ -145,6 +204,8 @@ Brokers spell the same company in different ways ("Secure" vs "SECURE", "Inc" vs
 | SETUP sits at "[5/6] creating the program environment" for 15+ minutes | It was installed on a network drive. Close it, end `python.exe` in Task Manager, delete that folder, and run `SETUP.bat` again with a folder on C:. |
 | "The program is not set up yet" | Run `SETUP.bat` first. |
 | "The contracts folder cannot be reached" | It is on L: and the network is not connected (VPN?). Connect and run again. |
+| "Trade sheet: NOT READ" in the summary | The trade sheet folder has no workbook or more than one (an open copy is fine), or the workbook is damaged. The rest of the run is complete. |
+| The dashboard did not open | Copy the `Dashboard: http://127.0.0.1:...` address from the window into the browser, or double-click `dashboard.html` in the results folder. |
 | A column you expected is missing | Check the summary: its first line names the build, and the `Format:` line names the format file used. Run `SETUP.bat` to update. |
 | A company is `NOT IN MAP` | Add it to `config\counterparty_map.csv` and run again. |
 

@@ -16,8 +16,8 @@ rem               (only if Git is not already installed)
 rem    Program -> the folder you choose on this computer (default
 rem               C:\RiskCode\KM-RiskReporting); run from inside a copy, it updates
 rem               that copy without asking for the program folder
-rem    Contracts -> the folder you choose, which can be on a network drive (L:);
-rem               the results go to "contracts-data" next to it
+rem    Folders  -> where the contracts are, where the results go and which folder
+rem               holds the master trade sheet; all may be on a network drive (L:)
 rem ======================================================================
 
 set "REPO_URL=https://github.com/ivanmueller/KM-RiskReporting.git"
@@ -92,52 +92,101 @@ goto :ask_app_dir
 echo.
 echo       %APP% is on a network drive. The program has to be installed on this
 echo       computer, for example C:\RiskCode\KM-RiskReporting - choose a folder on C:.
-echo       The contracts and results can still be on the network drive: the next
-echo       question asks where the contracts are.
+echo       The contracts, results and trade sheet can still be on the network drive:
+echo       the next questions ask for those folders.
 set "DEFAULT_APP=%INSTALL_DIR%"
 goto :ask_app_dir
 :app_dir_known
 echo       %APP%
 
-rem Where the contracts are (may be a network drive such as L:). RUN.bat reads them from
-rem there and writes the results to a "contracts-data" folder next to them.
+rem The data folders (each may be on a network drive such as L:):
+rem   contracts   - the confirmations RUN.bat reads
+rem   results     - every run makes a new dated folder in it (raw-data.xlsx, review.xlsx,
+rem                 dashboard.html)
+rem   trade sheet - the folder holding the master trade sheet (exactly one workbook), or none
 set "CONTRACTS="
+set "RESULTS="
+set "TRADESHEET="
 if exist "%TOOLS%\contracts-folder.txt" set /p CONTRACTS=<"%TOOLS%\contracts-folder.txt"
+if exist "%TOOLS%\results-folder.txt" set /p RESULTS=<"%TOOLS%\results-folder.txt"
+if exist "%TOOLS%\tradesheet-folder.txt" set /p TRADESHEET=<"%TOOLS%\tradesheet-folder.txt"
 if not defined CONTRACTS goto :ask_contracts
-echo.
-echo       Contracts folder: %CONTRACTS%
-choice /c YN /n /m "      Keep it? Press Y to keep it or N to choose another: "
+if not defined RESULTS goto :ask_contracts
+if not defined TRADESHEET goto :ask_contracts
+call :show_folders
+choice /c YN /n /m "      Keep these folders? Press Y to keep them or N to change them: "
 if errorlevel 2 goto :ask_contracts
 goto :contracts_known
+
 :ask_contracts
 set "DEFAULT_CONTRACTS=%APP%\contracts"
 if defined CONTRACTS set "DEFAULT_CONTRACTS=%CONTRACTS%"
 echo.
-echo       Where are the contracts? RUN.bat reads every confirmation in this folder
-echo       and puts the results in a "contracts-data" folder next to it.
+echo       1 of 3 - Where are the contracts? RUN.bat reads every confirmation in it.
 echo       Press Enter for: %DEFAULT_CONTRACTS%
-echo       or type or paste another folder, for example L:\Risk\Contracts
+echo       or type or paste another folder, for example L:\Risk\1. Contracts
 set "ANSWER=%DEFAULT_CONTRACTS%"
 set /p "ANSWER=      Contracts folder: "
-set "ANSWER=%ANSWER:"=%"
-if "%ANSWER%"=="" set "ANSWER=%DEFAULT_CONTRACTS%"
-for %%I in ("%ANSWER%") do set "CONTRACTS=%%~fI"
-if "%CONTRACTS:~-1%"=="\" set "CONTRACTS=%CONTRACTS:~0,-1%"
-for %%I in ("%CONTRACTS%\..") do set "RESULTS=%%~fI"
-if "%RESULTS:~-1%"=="\" set "RESULTS=%RESULTS:~0,-1%"
-echo.
-echo       Contracts: %CONTRACTS%
-echo       Results:   %RESULTS%\contracts-data
-choice /c YN /n /m "      Is that right? Press Y for yes or N to choose again: "
-if errorlevel 2 goto :ask_contracts
-if exist "%CONTRACTS%\" goto :save_contracts
+call :full_path
+set "CONTRACTS=%NORM%"
+if exist "%CONTRACTS%\" goto :ask_results
 mkdir "%CONTRACTS%" 2>nul
-if exist "%CONTRACTS%\" goto :save_contracts
+if exist "%CONTRACTS%\" goto :ask_results
 echo       That folder cannot be reached or created - if it is on L:, check the network
 echo       connection - or choose another one.
 goto :ask_contracts
-:save_contracts
+
+:ask_results
+for %%I in ("%CONTRACTS%\..") do set "PARENT=%%~fI"
+if "%PARENT:~-1%"=="\" set "PARENT=%PARENT:~0,-1%"
+set "DEFAULT_RESULTS=%PARENT%\contracts-data"
+if exist "%PARENT%\2. Raw Data\" set "DEFAULT_RESULTS=%PARENT%\2. Raw Data"
+if defined RESULTS set "DEFAULT_RESULTS=%RESULTS%"
+echo.
+echo       2 of 3 - Where should the results go? Each run makes a new dated folder in it.
+echo       Press Enter for: %DEFAULT_RESULTS%
+echo       or type or paste another folder, for example L:\Risk\2. Raw Data
+set "ANSWER=%DEFAULT_RESULTS%"
+set /p "ANSWER=      Results folder: "
+call :full_path
+set "RESULTS=%NORM%"
+if exist "%RESULTS%\" goto :ask_tradesheet
+mkdir "%RESULTS%" 2>nul
+if exist "%RESULTS%\" goto :ask_tradesheet
+echo       That folder cannot be reached or created - choose another one.
+goto :ask_results
+
+:ask_tradesheet
+set "DEFAULT_TRADESHEET=none"
+if exist "%PARENT%\4. Trade Sheet\" set "DEFAULT_TRADESHEET=%PARENT%\4. Trade Sheet"
+if defined TRADESHEET set "DEFAULT_TRADESHEET=%TRADESHEET%"
+echo.
+echo       3 of 3 - Which folder holds the master trade sheet? It must hold exactly one
+echo       workbook; its name does not matter. RUN.bat checks the confirmations against it.
+echo       Press Enter for: %DEFAULT_TRADESHEET%
+echo       or type or paste a folder, for example L:\Risk\4. Trade Sheet,
+echo       or type none to skip the check.
+set "ANSWER=%DEFAULT_TRADESHEET%"
+set /p "ANSWER=      Trade sheet folder: "
+set "ANSWER=%ANSWER:"=%"
+if /i "%ANSWER%"=="none" goto :no_tradesheet
+if "%ANSWER%"=="" goto :no_tradesheet
+call :full_path
+set "TRADESHEET=%NORM%"
+if exist "%TRADESHEET%" goto :confirm_folders
+echo       That folder cannot be found - if it is on L:, check the network connection -
+echo       or type none.
+goto :ask_tradesheet
+:no_tradesheet
+set "TRADESHEET=none"
+
+:confirm_folders
+call :show_folders
+choice /c YN /n /m "      Is that right? Press Y for yes or N to choose again: "
+if errorlevel 2 goto :ask_contracts
 > "%TOOLS%\contracts-folder.txt" echo %CONTRACTS%
+> "%TOOLS%\results-folder.txt" echo %RESULTS%
+> "%TOOLS%\tradesheet-folder.txt" echo %TRADESHEET%
 :contracts_known
 echo.
 echo       That is all the questions. The rest runs by itself.
@@ -240,7 +289,8 @@ echo   Program folder: %APP%
 echo.
 echo   1. Put the confirmations in: %CONTRACTS%
 echo   2. Double-click RUN.bat in the program folder.
-echo      The results go to the "contracts-data" folder next to the contracts.
+echo      Results: %RESULTS%
+echo      It then opens a dashboard of the results in your browser.
 echo.
 echo   Run SETUP.bat again at any time to get the latest version.
 echo  ======================================================================
@@ -253,6 +303,20 @@ exit /b 0
 rem ======================================================================
 rem  Helpers
 rem ======================================================================
+
+:show_folders
+echo.
+echo       Contracts:    %CONTRACTS%
+echo       Results:      %RESULTS%
+echo       Trade sheet:  %TRADESHEET%
+exit /b 0
+
+:full_path
+rem ANSWER -> NORM: quotes removed, a full path, no trailing backslash
+set "ANSWER=%ANSWER:"=%"
+for %%I in ("%ANSWER%") do set "NORM=%%~fI"
+if "%NORM:~-1%"=="\" if not "%NORM:~1%"==":\" set "NORM=%NORM:~0,-1%"
+exit /b 0
 
 :pip
 rem pip with the Windows certificate store as a fallback (company networks)

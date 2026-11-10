@@ -11,8 +11,12 @@ Reads every confirmation and writes the trades in the firm's ``raw-data-format``
   duplicates, missing values), with columns for Risk to mark each row OK or WRONG.
 
 ``review.xlsx``: the same two sheets plus **evidence** (for every filled cell, the exact
-place in the document and the text it was read from), **documents** (which parser read
-each file), **text** (all readable text with locations) and **issues**.
+place in the document and the text it was read from), **trade sheet** (each confirmation
+against the master trade sheet, and trade sheet deals with no confirmation), **financial**
+(the bank swaps: rolls and forward hedges), **documents** (which parser read each file),
+**text** (all readable text with locations) and **issues**.
+
+``dashboard.html``: the same results as a page to read (see :mod:`riskparse.dashboard`).
 
 Trades come only from the confirmation-family parsers (:mod:`riskparse.confirms`).
 A document no parser recognises is listed as ``UNRECOGNISED``; it is not guessed at.
@@ -48,6 +52,15 @@ from riskparse.rawformat import (
     read_format_headers,
     resolve_format_path,
 )
+from riskparse.sheetcheck import (
+    SheetCheck,
+    check_against_sheet,
+    classify_financial,
+    is_financial,
+    month_label,
+    month_of,
+)
+from riskparse.tradesheet import TradeSheetError, load_trade_sheet
 
 MAX_CELL = 32_000          # Excel's limit is 32,767 characters per cell
 MAX_TEXT_ROWS = 1_000_000  # Excel's limit is 1,048,576 rows per sheet
@@ -56,8 +69,18 @@ DOC_COLUMNS = ["doc", "folder", "file", "attached_to", "folder_class", "type", "
                "parsed_as", "trades", "pages", "sheets", "warnings", "sha256", "path"]
 CHECK_COLUMNS = ["Contract #", "Our side", "Source", "Broker / issuer", "Settlement currency",
                  "Price quoted in", "Fixed price", "Location", "Documents",
-                 "Needs attention", "Risk check (OK/WRONG)", "Comment", "Checked by"]
-_CHECK_WIDTHS = [22, 8, 24, 22, 10, 10, 10, 26, 60, 70, 14, 24, 12]
+                 "Needs attention", "Trade sheet", "Risk check (OK/WRONG)", "Comment",
+                 "Checked by"]
+_CHECK_WIDTHS = [22, 8, 24, 22, 10, 10, 10, 26, 60, 70, 40, 14, 24, 12]
+SHEET_COLUMNS = ["Status", "Contract #", "Trade sheet contract", "Trade sheet row", "Side",
+                 "Counterparty", "Trade sheet counterparty", "Grade", "Delivery month",
+                 "Confirmed volume", "Trade sheet volume (m3)", "Differential (confirmation)",
+                 "Differential (trade sheet)", "Trade date (confirmation)",
+                 "Trade date (trade sheet)", "Broker (confirmation)", "Broker (trade sheet)",
+                 "Settlement currency (confirmation)", "Currency (trade sheet)",
+                 "Differences", "Notes"]
+FINANCIAL_COLUMNS = ["Contract #", "Type", "Paired with", "Side", "Month", "Quantity", "Unit",
+                     "Fixed price", "Price unit", "Counterparty", "Trade date", "What it is"]
 
 
 class ReviewError(RuntimeError):
@@ -80,6 +103,12 @@ class ReviewResult:
     format_file: Path | None = None                          # None: built-in columns
     name_map: NameMap | None = None
     names: list[list] = field(default_factory=list)      # names sheet rows
+    sheet_check: SheetCheck | None = None                # None: no trade sheet compared
+    sheet_error: str = ""                                # why the trade sheet was not read
+    financial: list = field(default_factory=list)        # FinancialRow per bank swap
+    dashboard: Path | None = None
+    source: str = ""
+    build: str = ""
 
     def counts(self) -> Counter:
         return Counter((d["folder_class"], d["type"], d["status"]) for d in self.documents)
@@ -106,7 +135,7 @@ def _put(ws, row: int, values: list) -> None:
 
 REVIEW_ROOT = "contracts-data"
 # Bump with every change to the output, so a printed summary shows which code produced it.
-REVIEW_BUILD = "2026-11-02e (format file in config folder)"
+REVIEW_BUILD = "2026-11-10a (trade sheet check, bank swaps, dashboard)"
 
 
 def default_out_dir(src: Path, now: datetime | None = None) -> Path:
@@ -119,9 +148,15 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
                  format_path: str | Path | None = None,
                  us: list[str] | None = None,
                  names_path: str | Path | None = None,
-                 use_names: bool = True) -> ReviewResult:
+                 use_names: bool = True,
+                 results_root: str | Path | None = None,
+                 trade_sheet: str | Path | None = None) -> ReviewResult:
     """``format_path`` defaults to ``config/raw-data-format.xlsx`` and ``names_path`` to
-    ``config/counterparty_map.csv``, looked for in the current folder, then the repository."""
+    ``config/counterparty_map.csv``, looked for in the current folder, then the repository.
+
+    ``results_root``: the folder that collects every run (a new dated folder is made in it
+    each time); default ``contracts-data`` next to the source. ``out_dir`` overrides both.
+    ``trade_sheet``: the master trade sheet, or the folder holding it, to compare with."""
     src = Path(source)
     if not src.exists():
         raise ReviewError(f"{src} does not exist")
@@ -135,6 +170,8 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
             names_path = project_file(DEFAULT_MAP)
         if names_path is not None:
             nmap = load_name_map(names_path)
+    if out_dir is None and results_root is not None:
+        out_dir = Path(results_root) / f"{src.stem}_{datetime.now():%Y-%m-%d_%H%M%S}"
     if out_dir is None:
         out_dir = default_out_dir(src)
     out = check_output_location(out_dir, *([src] if src.is_dir() else []))
@@ -145,6 +182,7 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
                           format_added=added,
                           format_file=resolve_format_path(format_path) if format_path else None)
     result.name_map = nmap
+    result.source, result.build = str(src), REVIEW_BUILD
     us_names = tuple(us) if us else DEFAULT_US
 
     if src.is_dir():
@@ -190,8 +228,20 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     result.names = _name_rows(result.parsed, nmap)
     apply_name_map(result.trades, nmap)
     _price_flags(result)
+    if trade_sheet is not None:
+        try:
+            result.sheet_check = check_against_sheet(result.trades, load_trade_sheet(trade_sheet),
+                                                     nmap)
+            result.financial = result.sheet_check.financial
+        except TradeSheetError as exc:
+            result.sheet_error = str(exc)
+            result.issues.append((str(trade_sheet), "TRADE_SHEET_NOT_READ", str(exc)))
+    if result.sheet_check is None:
+        result.financial = classify_financial([t for t in result.trades if is_financial(t)])
     _write_raw_data(result)
     _write_review(result, text_rows, src)
+    from riskparse.dashboard import write_dashboard
+    result.dashboard = write_dashboard(result, out)
     return result
 
 
@@ -268,11 +318,53 @@ def _format_rows(result: ReviewResult):
         yield [cell_value(t, a) if (a := attr_for(h)) else None for h in result.format_headers]
 
 
+def _sheet_status(result: ReviewResult, t: Trade) -> str:
+    fin = next((f for f in result.financial if f.trade is t), None)
+    if fin is not None:
+        return f"FINANCIAL: {fin.kind}" + (f" with {fin.partner.contract_no}" if fin.partner
+                                            else "")
+    if result.sheet_check is None:
+        return "not compared" + (f" ({result.sheet_error})" if result.sheet_error else "")
+    row = result.sheet_check.for_trade(t)
+    if row is None:
+        return ""
+    return row.status + (f" {row.sheet.internal_contract or ''} ({row.sheet.where})"
+                         if row.sheet else "")
+
+
 def _check_rows(result: ReviewResult):
     for t in result.trades:
         yield [t.contract_no, t.side, t.family, t.broker, t.currency, t.price_unit,
                cell_value(t, "fixed_price"), t.location, "\n".join(t.documents),
-               "\n".join(t.flags), None, None, None]
+               "\n".join(t.flags), _sheet_status(result, t), None, None, None]
+
+
+def _sheet_rows(result: ReviewResult):
+    for r in result.sheet_check.rows:
+        t, s = r.trade, r.sheet
+        yield [r.status, t.contract_no if t else None,
+               s.internal_contract if s else None, s.where if s else None,
+               (t or s).side, t.counterparty if t else (s.master_counterparty or None),
+               s.counterparty if s else None, (t or s).grade,
+               month_label(month_of(t.start_date) if t else s.delivery_month),
+               (f"{cell_value(t, 'quantity')} {t.unit}" if t and t.quantity is not None
+                else None),
+               cell_value(s, "volume") if s else None,
+               cell_value(t, "fixed_differential") if t else None,
+               (cell_value(s, "differential") if s and s.differential is not None
+                else (s.differential_text or None) if s else None),
+               t.trade_date if t else None, s.trade_date if s else None,
+               t.family if t else None, s.broker if s else None,
+               t.currency if t else None, s.currency if s else None,
+               "\n".join(r.differences), "\n".join(r.notes)]
+
+
+def _financial_rows(result: ReviewResult):
+    for f in result.financial:
+        t = f.trade
+        yield [t.contract_no, f.kind, f.partner.contract_no if f.partner else None, t.side,
+               t.term, cell_value(t, "quantity"), t.unit, cell_value(t, "fixed_price"),
+               t.price_unit, t.counterparty, t.trade_date, f.note]
 
 
 def _fill(ws, headers: list[str], rows, widths: list[int] | None = None) -> None:
@@ -319,6 +411,12 @@ def _write_review(result: ReviewResult, text_rows: list, src: Path) -> None:
     _fill(wb.create_sheet("evidence"), ["row", "Contract #", "column", "value",
                                         "where it came from (location: text as written)",
                                         "doc", "file"], ev, [5, 22, 18, 22, 80, 7, 50])
+    if result.sheet_check is not None:
+        _fill(wb.create_sheet("trade sheet"), SHEET_COLUMNS, _sheet_rows(result),
+              [26, 14, 16, 18, 6, 34, 18, 8, 9, 16, 12, 11, 11, 12, 12, 22, 12, 10, 10, 60, 60])
+    if result.financial:
+        _fill(wb.create_sheet("financial"), FINANCIAL_COLUMNS, _financial_rows(result),
+              [14, 14, 14, 6, 9, 10, 6, 10, 10, 26, 12, 90])
     _fill(wb.create_sheet("names"), ["name as written", "master name", "matched",
                                      "documents"], result.names, [60, 50, 26, 10])
     _fill(wb.create_sheet("documents"), DOC_COLUMNS,
@@ -332,6 +430,12 @@ def _write_review(result: ReviewResult, text_rows: list, src: Path) -> None:
 
 
 _FLAG_KINDS = (("swap: no trader", "swap: no trader named on the confirmation"),
+               ("trade sheet: not", "not on the trade sheet"),
+               ("trade sheet differs", "differs from the trade sheet"),
+               ("financial (roll)", "bank swap: roll (not on the trade sheet by design)"),
+               ("financial (forward hedge)", "bank swap: forward hedge (not on the trade "
+                                             "sheet by design)"),
+               ("financial (swap)", "bank swap: single swap - check what it hedges"),
                ("price currency", "price currency not stated"),
                ("counterparty '", "counterparty not in the counterparty map"),
                ("flat price", "flat price with no index (put in Fixed Price)"),
@@ -347,6 +451,29 @@ def flag_kind(flag: str) -> str:
         if flag.startswith(prefix):
             return kind + (" - DISAGREES" if "DISAGREES" in flag else "")
     return flag.split(":")[0]
+
+
+def _sheet_summary(result: ReviewResult) -> list[str]:
+    from riskparse import sheetcheck as sc
+    fin = Counter(f.kind for f in result.financial)
+    lines = []
+    if result.sheet_check is None:
+        lines.append("Trade sheet: " + (f"NOT READ - {result.sheet_error}" if result.sheet_error
+                                        else "not compared (no trade sheet folder given)"))
+    else:
+        c = result.sheet_check
+        lines.append(f"Trade sheet: {c.sheet.path.name} ({len(c.sheet.trades)} rows from "
+                     f"{len(c.sheet.sheets_read)} tab(s))")
+        lines.append(f"  physical confirmations matched           "
+                     f"{c.count(sc.MATCHED) + c.count(sc.DIFFERENCES)}"
+                     f" ({c.count(sc.DIFFERENCES)} with differences)")
+        lines.append(f"  confirmations not on the trade sheet      {c.count(sc.NOT_ON_SHEET)}")
+        lines.append(f"  trade sheet deals with no confirmation    "
+                     f"{c.count(sc.NO_CONFIRMATION)} brokered, "
+                     f"{c.count(sc.NO_CONFIRMATION_DIRECT)} direct (in the confirmation period)")
+    lines.append(f"Bank swaps: {fin.get(sc.ROLL, 0) // 2} roll(s) of two swaps, "
+                 f"{fin.get(sc.FORWARD_HEDGE, 0)} forward hedge(s), {fin.get(sc.SWAP, 0)} other")
+    return lines
 
 
 def format_summary(result: ReviewResult) -> str:
@@ -372,6 +499,7 @@ def format_summary(result: ReviewResult) -> str:
         lines.append(f"Counterparty map: {len(result.names) - missing} spelling(s) mapped, "
                      f"{missing} not in the map (see the names sheet)")
         lines.append(f"  map file: {result.name_map.path.resolve()}")
+    lines += _sheet_summary(result)
     lines.append(f"Trades with something to look at: {len(attention)} (see the checks sheet)")
     kinds = Counter(flag_kind(f) for t in result.trades for f in t.flags)
     for kind, n in kinds.most_common(8):

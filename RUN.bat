@@ -7,10 +7,11 @@ rem ======================================================================
 rem  KM Risk Reporting - RUN
 rem
 rem  Double-click this file. It reads every confirmation in the contracts
-rem  folder chosen in SETUP.bat (which can be on L:) and writes
-rem  raw-data.xlsx and review.xlsx into a new folder in "contracts-data",
-rem  next to the contracts folder, then opens that folder.
-rem  To use another contracts folder, run SETUP.bat again.
+rem  folder chosen in SETUP.bat (which can be on L:), checks them against the
+rem  master trade sheet, writes raw-data.xlsx, review.xlsx and dashboard.html
+rem  into a new dated folder in the results folder, opens that folder, and
+rem  shows the dashboard in the browser until this window is closed.
+rem  To change the folders, run SETUP.bat again.
 rem ======================================================================
 
 if exist ".venv\Scripts\riskparse.exe" goto :installed
@@ -21,12 +22,23 @@ pause
 exit /b 1
 :installed
 
+set "SETTINGS=%LOCALAPPDATA%\KM-RiskReporting"
 set "CONTRACTS=%CD%\contracts"
-set "SETTING=%LOCALAPPDATA%\KM-RiskReporting\contracts-folder.txt"
-if exist "%SETTING%" set /p CONTRACTS=<"%SETTING%"
+set "RESULTS="
+set "TRADESHEET="
+if exist "%SETTINGS%\contracts-folder.txt" set /p CONTRACTS=<"%SETTINGS%\contracts-folder.txt"
+if exist "%SETTINGS%\results-folder.txt" set /p RESULTS=<"%SETTINGS%\results-folder.txt"
+if exist "%SETTINGS%\tradesheet-folder.txt" set /p TRADESHEET=<"%SETTINGS%\tradesheet-folder.txt"
+if defined RESULTS goto :results_known
 for %%I in ("%CONTRACTS%\..") do set "RESULTS=%%~fI"
 if "%RESULTS:~-1%"=="\" set "RESULTS=%RESULTS:~0,-1%"
 set "RESULTS=%RESULTS%\contracts-data"
+:results_known
+set "TS_ARG="
+if not defined TRADESHEET goto :ts_known
+if /i "%TRADESHEET%"=="none" goto :ts_known
+set TS_ARG=--trade-sheet "%TRADESHEET%"
+:ts_known
 
 if exist "%CONTRACTS%\" goto :folder_found
 mkdir "%CONTRACTS%" 2>nul
@@ -58,7 +70,7 @@ exit /b 1
 echo.
 echo  Reading the confirmations in %CONTRACTS% ...
 echo.
-".venv\Scripts\riskparse.exe" review "%CONTRACTS%"
+".venv\Scripts\riskparse.exe" review "%CONTRACTS%" --results "%RESULTS%" %TS_ARG%
 set "RC=%ERRORLEVEL%"
 echo.
 if "%RC%"=="0" goto :done
@@ -77,10 +89,16 @@ echo  ======================================================================
 echo   Finished. The results are in:
 echo   %RESULTS%\%LATEST%
 echo.
-echo   raw-data.xlsx - the trades in the firm's format, plus the checks sheet
-echo   review.xlsx   - the same, with evidence, names, documents and issues
+echo   raw-data.xlsx  - the trades in the firm's format, plus the checks sheet
+echo   review.xlsx    - the same, with the trade sheet check, bank swaps,
+echo                    evidence, names, documents and issues
+echo   dashboard.html - the risk dashboard, opening in your browser now
 echo  ======================================================================
 echo.
-if defined LATEST start "" "%RESULTS%\%LATEST%"
+if not defined LATEST goto :no_dashboard
+start "" "%RESULTS%\%LATEST%"
+".venv\Scripts\riskparse.exe" dashboard "%RESULTS%"
+exit /b 0
+:no_dashboard
 pause
 exit /b 0

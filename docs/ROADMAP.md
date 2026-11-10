@@ -137,9 +137,9 @@ for a gate that needs real data or sign-off.
 
 ### Week 4 (Nov 23–27) — Reconcile and verify
 
-- [~] Matching. *Done: exact references; a trade can't be MATCHED without side, volume and price compared. Left: composite matching, amendment chains, duplicate detection, month scoping (S-2).*
-- [ ] Imports of every trader sheet and of Egistix, with real data
-- [ ] Break report and exception owners/aging
+- [~] Matching. *Done: exact references; a trade can't be MATCHED without side, volume and price compared. **Step 1 confirmations vs the master trade sheet** (`sheetcheck.py`): composite key counterparty + side + grade + delivery month, scored on differential, trade date, broker, volume and currency; apportioned sale volumes recognised; missing confirmations within the period; bank swaps classified as roll pairs or forward hedges. Tested on the October confirmations against the risk report's trading-schedule tabs (30 of 33 physical matched). Left: run on the real "October Trading 2026" workbook; confirm the apportionment reading with the desk; amendment chains across months (S-2).*
+- [~] Imports of every trader sheet and of Egistix, with real data. *Done: the master trade sheet is read by header name from every tab (`tradesheet.py`). Left: Egistix.*
+- [~] Break report and exception owners/aging. *Done: the trade sheet check on review.xlsx, checks sheet and the local risk dashboard (`dashboard.py`). Left: owners and aging.*
 - [ ] Full manual verification of material terms for every October trade **(Risk)**
 - [ ] **Gate:** every known October trade matched, classified or explicitly excepted
 

@@ -1,0 +1,437 @@
+# ruff: noqa: E501  (the embedded page template has long HTML/JavaScript lines)
+"""The run's risk dashboard: one self-contained HTML page, and a temporary local server.
+
+``write_dashboard`` turns a review result (parsed confirmations, the trade sheet check and
+the swaps) into ``dashboard.html`` in the run folder: key figures, checks that should all
+read OK, positions by delivery month and grade, the trade sheet reconciliation, the bank
+swaps and the counterparties. Everything is embedded in the page (no internet, no
+libraries), so it also opens straight from the folder.
+
+``serve`` shows that page at ``http://127.0.0.1:<port>/`` until the window is closed. It
+listens on this computer only: nobody else on the network can open it.
+"""
+
+from __future__ import annotations
+
+import http.server
+import json
+import socketserver
+import webbrowser
+from collections import defaultdict
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import Path
+
+from riskparse.sheetcheck import (
+    DIFFERENCES,
+    MATCHED,
+    NO_CONFIRMATION,
+    NO_CONFIRMATION_DIRECT,
+    NOT_ON_SHEET,
+    OUTSIDE_PERIOD,
+    is_financial,
+    month_label,
+    month_of,
+)
+
+BBL_PER_M3 = 6.28981
+FILE = "dashboard.html"
+DEFAULT_PORT = 8765
+
+
+def _f(v):
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, (date, datetime)):
+        return v.isoformat()[:10]
+    return v
+
+
+def _m3(t) -> float | None:
+    """A confirmation's volume in m3 (bbl converted), or None."""
+    if t.quantity is None:
+        return None
+    q = float(t.quantity)
+    return q / BBL_PER_M3 if (t.unit or "").lower().startswith("bbl") else q
+
+
+def build_data(result) -> dict:
+    trades = result.trades
+    chk = getattr(result, "sheet_check", None)
+    financial = getattr(result, "financial", []) or []
+    physical = [t for t in trades if not is_financial(t)]
+    by_trade = {id(r.trade): r for r in (chk.rows if chk else []) if r.trade is not None}
+
+    phys_rows = []
+    for t in physical:
+        r = by_trade.get(id(t))
+        phys_rows.append({
+            "contract": t.contract_no, "trade_date": _f(t.trade_date),
+            "month": month_label(month_of(t.start_date)), "side": t.side,
+            "counterparty": t.counterparty, "grade": t.grade, "quantity": _f(t.quantity),
+            "unit": t.unit, "differential": _f(t.fixed_differential),
+            "currency": t.price_currency, "settles": t.currency,
+            "source": t.family.split(" (")[0], "trader": t.trader,
+            "status": r.status if r else ("NOT CHECKED" if chk is None else NOT_ON_SHEET),
+            "sheet_ref": (r.sheet.internal_contract or r.sheet.where) if r and r.sheet else "",
+            "flags": t.flags})
+
+    fin_rows = [{"contract": f.trade.contract_no, "kind": f.kind,
+                 "partner": f.partner.contract_no if f.partner else "",
+                 "side": f.trade.side, "term": f.trade.term,
+                 "quantity": _f(f.trade.quantity), "unit": f.trade.unit,
+                 "fixed_price": _f(f.trade.fixed_price), "price_unit": f.trade.price_unit,
+                 "counterparty": f.trade.counterparty, "trade_date": _f(f.trade.trade_date),
+                 "note": f.note} for f in financial]
+
+    # confirmed physical position by delivery month and grade
+    pos = defaultdict(lambda: {"buy": 0.0, "sell": 0.0, "buy_dv": 0.0, "sell_dv": 0.0})
+    for t in physical:
+        m3 = _m3(t)
+        if m3 is None or not t.start_date:
+            continue
+        p = pos[(month_of(t.start_date), t.grade or "-")]
+        side = "buy" if t.side == "BUY" else "sell"
+        p[side] += m3
+        if t.fixed_differential is not None:
+            p[side + "_dv"] += m3 * float(t.fixed_differential)
+    conf_position = []
+    for (m, g), p in sorted(pos.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+        conf_position.append({
+            "month": month_label(m), "grade": g, "bought": p["buy"], "sold": p["sell"],
+            "net": p["buy"] - p["sell"],
+            "wa_buy_diff": p["buy_dv"] / p["buy"] if p["buy"] else None,
+            "wa_sell_diff": p["sell_dv"] / p["sell"] if p["sell"] else None})
+
+    sheet_position, recon, sheet_info = [], [], None
+    if chk is not None:
+        sp = defaultdict(lambda: {"buy": 0.0, "sell": 0.0})
+        for s in chk.sheet.trades:
+            if s.volume is None or s.delivery_month is None:
+                continue
+            sp[(s.delivery_month, s.grade or "-")]["buy" if s.side == "BUY" else "sell"] += \
+                float(s.volume)
+        for (m, g), p in sorted(sp.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+            sheet_position.append({"month": month_label(m), "grade": g, "bought": p["buy"],
+                                   "sold": p["sell"], "net": p["buy"] - p["sell"]})
+        for r in chk.rows:
+            t, s = r.trade, r.sheet
+            recon.append({
+                "status": r.status, "contract": t.contract_no if t else "",
+                "sheet_contract": s.internal_contract if s else "",
+                "where": s.where if s else "",
+                "side": (t or s).side, "counterparty": t.counterparty if t else
+                (s.master_counterparty or s.counterparty),
+                "grade": (t or s).grade,
+                "month": month_label(month_of(t.start_date)) if t else
+                month_label(s.delivery_month),
+                "conf_qty": _f(t.quantity) if t else None,
+                "sheet_qty": _f(s.volume) if s else None,
+                "conf_diff": _f(t.fixed_differential) if t else None,
+                "sheet_diff": _f(s.differential) if s else None,
+                "conf_date": _f(t.trade_date) if t else None,
+                "sheet_date": _f(s.trade_date) if s else None,
+                "conf_broker": t.family.split(" (")[0] if t else "",
+                "sheet_broker": s.broker if s else "",
+                "differences": r.differences, "notes": r.notes})
+        sheet_info = {"file": chk.sheet.path.name,
+                      "modified": f"{chk.sheet.modified:%Y-%m-%d %H:%M}",
+                      "tabs": chk.sheet.sheets_read, "rows": len(chk.sheet.trades),
+                      "standing": chk.standing_rows, "internal": chk.internal_rows,
+                      "period": [_f(chk.period[0]), _f(chk.period[1])] if chk.period else None}
+
+    cp = defaultdict(lambda: {"bought": 0.0, "sold": 0.0, "trades": 0})
+    for t in physical:
+        m3 = _m3(t) or 0.0
+        c = cp[t.counterparty or "-"]
+        c["bought" if t.side == "BUY" else "sold"] += m3
+        c["trades"] += 1
+    counterparties = sorted(({"name": k, **v} for k, v in cp.items()),
+                            key=lambda c: -(c["bought"] + c["sold"]))
+
+    count = (lambda st: sum(1 for r in chk.rows if r.status == st)) if chk else (lambda st: 0)
+    unrec = sum(1 for d in result.documents if d.get("parsed_as") == "UNRECOGNISED")
+    unmapped = sum(1 for r in result.names if r[2] == "NOT IN MAP")
+    checks = [
+        ["Documents no parser recognised", unrec, 0],
+        ["Company names not in the counterparty map", unmapped, 0],
+    ]
+    if chk is not None:
+        checks += [
+            ["Physical confirmations not on the trade sheet", count(NOT_ON_SHEET), 0],
+            ["Matched trades that differ from the trade sheet", count(DIFFERENCES), 0],
+            ["Trade sheet deals in the period without a confirmation",
+             count(NO_CONFIRMATION) + count(NO_CONFIRMATION_DIRECT), 0],
+        ]
+    checks.append(["Bank swaps not identified as a roll or forward hedge",
+                   sum(1 for f in financial if f.kind == "SWAP"), 0])
+    checks = [{"check": c, "value": v, "target": tg, "ok": v == tg} for c, v, tg in checks]
+
+    attention = [{"contract": t.contract_no, "counterparty": t.counterparty, "flags": t.flags}
+                 for t in trades if t.flags]
+    return {
+        "generated": f"{datetime.now():%Y-%m-%d %H:%M}",
+        "position_date": f"{date.today():%B} {date.today().day}, {date.today():%Y}",
+        "source": str(getattr(result, "source", "")),
+        "build": getattr(result, "build", ""),
+        "trade_sheet": sheet_info, "sheet_error": getattr(result, "sheet_error", ""),
+        "kpi": {
+            "physical": len(physical), "financial": len(financial),
+            "matched": count(MATCHED) + count(DIFFERENCES), "differences": count(DIFFERENCES),
+            "not_on_sheet": count(NOT_ON_SHEET),
+            "missing": count(NO_CONFIRMATION) + count(NO_CONFIRMATION_DIRECT),
+            "outside": count(OUTSIDE_PERIOD),
+            "swap_bbl": sum(float(f.trade.quantity or 0) for f in financial),
+            "rolls": sum(1 for f in financial if f.kind == "ROLL") // 2,
+            "hedges": sum(1 for f in financial if f.kind == "FORWARD HEDGE"),
+        },
+        "checks": checks, "physical": phys_rows, "financial": fin_rows,
+        "conf_position": conf_position, "sheet_position": sheet_position,
+        "recon": recon, "counterparties": counterparties, "attention": attention,
+        "bbl_per_m3": BBL_PER_M3,
+    }
+
+
+def write_dashboard(result, out_dir: Path) -> Path:
+    data = json.dumps(build_data(result), default=str).replace("</", "<\\/")
+    path = Path(out_dir) / FILE
+    path.write_text(TEMPLATE.replace("__DATA__", data), encoding="utf-8")
+    return path
+
+
+def find_dashboard(location: str | Path) -> Path:
+    """The dashboard in a run folder, or the newest one under a results folder."""
+    p = Path(location)
+    if p.is_file():
+        return p
+    if (p / FILE).is_file():
+        return p / FILE
+    found = sorted(p.glob(f"*/{FILE}"), key=lambda f: f.stat().st_mtime) if p.is_dir() else []
+    if not found:
+        raise FileNotFoundError(f"no {FILE} in {p} or its run folders")
+    return found[-1]
+
+
+def make_server(location: str | Path, port: int = DEFAULT_PORT):
+    """A server for the dashboard on this computer only (127.0.0.1): (server, url).
+    Tries ``port`` and the next 19 if it is taken."""
+    page = find_dashboard(location).read_bytes()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):          # noqa: N802 (http.server's name)
+            if self.path.split("?")[0] not in ("/", "/" + FILE):
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(page)
+
+        def log_message(self, *args):
+            pass
+
+    for p in range(port, port + 20):
+        try:
+            server = socketserver.ThreadingTCPServer(("127.0.0.1", p), Handler)
+        except OSError:
+            continue
+        server.daemon_threads = True
+        return server, f"http://127.0.0.1:{server.server_address[1]}/"
+    raise OSError(f"no free port between {port} and {port + 19}")
+
+
+def serve(location: str | Path, port: int = DEFAULT_PORT, open_browser: bool = True) -> None:
+    """Show the dashboard until the window is closed (or Ctrl+C)."""
+    server, url = make_server(location, port)
+    print(f"Dashboard: {url}")
+    print("It stays available while this window is open. Close the window (or press "
+          "Ctrl+C) to stop it.")
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+TEMPLATE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Risk Dashboard</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--ink:#1d2433;--muted:#5d6678;--line:#dde1e8;--head:#14213d;
+--headink:#fff;--ok:#1a7f4b;--okbg:#e3f4ea;--bad:#b42318;--badbg:#fde8e6;--warn:#9a6700;
+--warnbg:#fff4d6;--buy:#2f6fb3;--sell:#c4572e;--net:#14213d;--chip:#eef1f6}
+@media (prefers-color-scheme:dark){:root{--bg:#11151c;--panel:#1a2029;--ink:#e6e9ef;
+--muted:#9aa3b2;--line:#2c3441;--head:#0b1220;--headink:#e6e9ef;--ok:#5cc28c;--okbg:#14301f;
+--bad:#ff8a7a;--badbg:#3a1714;--warn:#f2c94c;--warnbg:#33290d;--buy:#6ea8e8;--sell:#f08a5d;
+--net:#e6e9ef;--chip:#232a35}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);
+font:14px/1.45 "Segoe UI",system-ui,-apple-system,Arial,sans-serif}
+header{background:var(--head);color:var(--headink);padding:18px 24px}
+header h1{margin:0;font-size:20px;letter-spacing:.02em}header p{margin:4px 0 0;opacity:.8}
+main{max-width:1400px;margin:0 auto;padding:18px 16px 60px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.kpi b{display:block;font-size:26px;font-variant-numeric:tabular-nums}
+.kpi span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.kpi small{display:block;color:var(--muted);margin-top:2px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+padding:16px;margin-top:16px}
+section h2{margin:0 0 4px;font-size:16px}section .sub{color:var(--muted);margin:0 0 12px}
+.scroll{overflow-x:auto;max-width:100%}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;
+white-space:nowrap}td.wrap{white-space:normal;min-width:320px;max-width:520px}
+th{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap;position:sticky;top:0;
+background:var(--panel)}td.n,th.n{text-align:right}
+.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;white-space:nowrap}
+.ok{background:var(--okbg);color:var(--ok)}.bad{background:var(--badbg);color:var(--bad)}
+.warn{background:var(--warnbg);color:var(--warn)}.mute{background:var(--chip);color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+.chips button{border:1px solid var(--line);background:var(--chip);color:var(--ink);
+border-radius:99px;padding:4px 12px;cursor:pointer;font:inherit}
+.chips button.on{background:var(--head);color:var(--headink);border-color:var(--head)}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.grid2>section{min-width:0}header p{overflow-wrap:anywhere}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}}
+.bar{display:grid;grid-template-columns:minmax(70px,150px) minmax(0,1fr) 90px;align-items:center;gap:8px;margin:4px 0}
+.bar .lab{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar .track{position:relative;height:16px;background:var(--chip);border-radius:4px}
+.bar i{position:absolute;top:0;bottom:0;border-radius:4px}
+.bar .v{text-align:right;font-variant-numeric:tabular-nums}
+.legend{display:flex;gap:14px;color:var(--muted);font-size:12px;margin-bottom:8px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}
+ul.att{margin:0;padding-left:18px}ul.att li{margin:2px 0}
+.note{color:var(--muted);font-size:12px}.empty{color:var(--muted);font-style:italic}
+</style>
+</head>
+<body>
+<header>
+<h1>KINGSTON MARKETING LIMITED | RISK DASHBOARD</h1>
+<p id="meta"></p>
+</header>
+<main>
+<div class="kpis" id="kpis"></div>
+<section><h2>Checks (all should show OK)</h2><p class="sub">Each line compares a count with
+its target, like the checks block of the risk report.</p><div class="scroll"><table id="checks">
+</table></div></section>
+<div class="grid2">
+<section><h2>Confirmed physical position by delivery month (m3)</h2>
+<p class="sub">From the confirmations: bought, sold and net per month and grade, with the
+volume-weighted differential (USD/bbl).</p><div id="confbars"></div>
+<div class="scroll"><table id="confpos"></table></div></section>
+<section><h2>Trade sheet position by delivery month (m3)</h2>
+<p class="sub" id="sheetsub"></p><div id="sheetbars"></div>
+<div class="scroll"><table id="sheetpos"></table></div></section>
+</div>
+<section><h2>Trade sheet reconciliation</h2><p class="sub" id="reconsub"></p>
+<div class="chips" id="chips"></div><div class="scroll"><table id="recon"></table></div>
+</section>
+<section><h2>Financial swaps (bank)</h2><p class="sub">Not on the trade sheet by design. A
+roll is two swaps (four legs) moving exposure from one month to the next; a forward hedge
+locks in a price months ahead.</p><div class="scroll"><table id="fin"></table></div>
+</section>
+<div class="grid2">
+<section><h2>Counterparties (confirmed m3)</h2><div class="legend"><span><i
+style="background:var(--buy)"></i>bought</span><span><i style="background:var(--sell)"></i>sold
+</span></div><div id="cpty"></div></section>
+<section><h2>Needs attention</h2><p class="sub">Everything flagged on the checks sheet.</p>
+<div id="att"></div></section>
+</div>
+<p class="note" id="foot"></p>
+</main>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const num = (v, d=0, maxd=d) => v == null || v === '' ? '' : Number(v).toLocaleString('en-CA', {minimumFractionDigits:d, maximumFractionDigits:maxd});
+const statusClass = s => s.startsWith('MATCHED -') || s === 'NOT ON TRADE SHEET' ? 'bad' :
+  s.startsWith('NO CONFIRMATION') ? 'warn' : s === 'MATCHED' ? 'ok' : 'mute';
+
+$('meta').textContent = `Position date: ${D.position_date}  |  generated ${D.generated}` +
+  (D.trade_sheet ? `  |  trade sheet: ${D.trade_sheet.file} (saved ${D.trade_sheet.modified})` : '  |  no trade sheet compared');
+
+const K = D.kpi, kp = [];
+kp.push(['Confirmed trades', K.physical + K.financial, `${K.physical} physical, ${K.financial} bank swaps`]);
+if (D.trade_sheet) {
+  const pct = K.physical ? Math.round(100 * K.matched / K.physical) : 0;
+  kp.push(['On the trade sheet', `${pct}%`, `${K.matched} of ${K.physical} physical; ${K.differences} with differences`]);
+  kp.push(['Not on trade sheet', K.not_on_sheet, 'confirmations the desk has not recorded']);
+  kp.push(['Missing confirmations', K.missing, 'trade sheet deals in the period, no confirmation']);
+}
+kp.push(['Bank swaps', num(K.swap_bbl), `bbl; ${K.rolls} roll(s), ${K.hedges} forward hedge(s)`]);
+const vol = {}; D.conf_position.forEach(p => vol[p.month] = (vol[p.month] || 0) + p.bought + p.sold);
+const next = Object.keys(vol).sort((a, b) => vol[b] - vol[a])[0] || '';
+const netNext = D.conf_position.filter(p => p.month === next).reduce((a, p) => a + p.net, 0);
+if (next) kp.push([`Confirmed net ${next}`, num(netNext), `m3 (${num(netNext * D.bbl_per_m3)} bbl), long/(short)`]);
+$('kpis').innerHTML = kp.map(([l, v, s]) => `<div class="kpi"><span>${esc(l)}</span><b>${esc(v)}</b><small>${esc(s)}</small></div>`).join('');
+
+$('checks').innerHTML = '<tr><th>Check</th><th class="n">Value</th><th class="n">Target</th><th>Result</th></tr>' +
+  D.checks.map(c => `<tr><td>${esc(c.check)}</td><td class="n">${c.value}</td><td class="n">${c.target}</td><td><span class="pill ${c.ok ? 'ok' : 'bad'}">${c.ok ? 'OK' : 'CHECK'}</span></td></tr>`).join('') +
+  (D.sheet_error ? `<tr><td colspan="4"><span class="pill bad">TRADE SHEET NOT READ</span> ${esc(D.sheet_error)}</td></tr>` : '');
+
+function monthBars(el, rows) {
+  const by = {};
+  rows.forEach(r => { const m = by[r.month] ||= {b:0, s:0}; m.b += r.bought; m.s += r.sold; });
+  const months = Object.keys(by), max = Math.max(1, ...months.map(m => Math.max(by[m].b, by[m].s)));
+  $(el).innerHTML = '<div class="legend"><span><i style="background:var(--buy)"></i>bought</span><span><i style="background:var(--sell)"></i>sold</span></div>' +
+    months.map(m => `<div class="bar"><div class="lab">${esc(m)}</div><div class="track">
+      <i style="left:0;width:${100*by[m].b/max}%;background:var(--buy);height:50%"></i>
+      <i style="left:0;top:50%;width:${100*by[m].s/max}%;background:var(--sell);height:50%"></i></div>
+      <div class="v">${num(by[m].b - by[m].s)}</div></div>`).join('');
+}
+function posTable(el, rows, diffs) {
+  if (!rows.length) { $(el).innerHTML = '<tr><td class="empty">Nothing to show.</td></tr>'; return; }
+  $(el).innerHTML = `<tr><th>Month</th><th>Grade</th><th class="n">Bought</th><th class="n">Sold</th><th class="n">Net m3</th><th class="n">Net bbl</th>${diffs ? '<th class="n">Buy diff</th><th class="n">Sell diff</th>' : ''}</tr>` +
+    rows.map(r => `<tr><td>${esc(r.month)}</td><td>${esc(r.grade)}</td><td class="n">${num(r.bought)}</td><td class="n">${num(r.sold)}</td><td class="n"><b>${num(r.net)}</b></td><td class="n">${num(r.net * D.bbl_per_m3)}</td>${diffs ? `<td class="n">${num(r.wa_buy_diff, 2)}</td><td class="n">${num(r.wa_sell_diff, 2)}</td>` : ''}</tr>`).join('');
+}
+monthBars('confbars', D.conf_position); posTable('confpos', D.conf_position, true);
+if (D.trade_sheet) {
+  $('sheetsub').textContent = `Sum of the trade sheet's volumes as entered (tabs: ${D.trade_sheet.tabs.join(', ')}), including standing agreements and internal rows.`;
+  monthBars('sheetbars', D.sheet_position); posTable('sheetpos', D.sheet_position, false);
+} else { $('sheetsub').textContent = 'No trade sheet was compared in this run.'; }
+
+let filter = 'IN PERIOD';
+const inGroup = (r, f) => f === 'ALL' || (f === 'IN PERIOD' ? r.status !== 'OUTSIDE CONFIRMATION PERIOD' : r.status === f);
+function drawRecon() {
+  const rows = D.recon.filter(r => inGroup(r, filter));
+  $('recon').innerHTML = '<tr><th>Status</th><th>Contract #</th><th>Trade sheet #</th><th>Side</th><th>Counterparty</th><th>Grade</th><th>Month</th><th class="n">Confirmed m3</th><th class="n">Sheet m3</th><th class="n">Conf diff</th><th class="n">Sheet diff</th><th>Trade date</th><th>Broker</th><th>Differences / notes</th></tr>' +
+    (rows.length ? rows.map(r => `<tr><td><span class="pill ${statusClass(r.status)}">${esc(r.status)}</span></td><td>${esc(r.contract)}</td><td>${esc(r.sheet_contract)}<div class="note">${esc(r.where)}</div></td><td>${esc(r.side)}</td><td>${esc(r.counterparty)}</td><td>${esc(r.grade)}</td><td>${esc(r.month)}</td><td class="n">${num(r.conf_qty)}</td><td class="n">${num(r.sheet_qty, 0, 2)}</td><td class="n">${num(r.conf_diff, 2)}</td><td class="n">${num(r.sheet_diff, 2)}</td><td>${esc(r.conf_date || r.sheet_date)}${r.conf_date && r.sheet_date && r.conf_date !== r.sheet_date ? ' / ' + esc(r.sheet_date) : ''}</td><td>${esc(r.conf_broker || r.sheet_broker)}${r.conf_broker && r.sheet_broker ? ' / ' + esc(r.sheet_broker) : ''}</td><td class="wrap">${r.differences.map(d => `<div class="pill bad" style="white-space:normal">${esc(d)}</div>`).join('')}${r.notes.map(n => `<div class="note">${esc(n)}</div>`).join('')}</td></tr>`).join('')
+     : '<tr><td colspan="14" class="empty">Nothing in this group.</td></tr>');
+}
+if (D.trade_sheet) {
+  const counts = {}; D.recon.forEach(r => counts[r.status] = (counts[r.status] || 0) + 1);
+  const p = D.trade_sheet.period;
+  $('reconsub').textContent = `Confirmations ${p ? `dated ${p[0]} to ${p[1]}` : ''} compared with ${D.trade_sheet.rows} trade sheet rows. Matched on counterparty, side, grade and delivery month; then differential, trade date, broker and volume. ${D.trade_sheet.standing} standing (Evergreen/Term) and ${D.trade_sheet.internal} internal rows are not expected to have confirmations.`;
+  const chips = [['IN PERIOD', D.recon.filter(r => inGroup(r, 'IN PERIOD')).length], ...Object.entries(counts), ['ALL', D.recon.length]];
+  const label = s => s === 'ALL' ? 'Everything' : s === 'IN PERIOD' ? 'In the confirmation period' : s;
+  $('chips').innerHTML = chips.map(([s, n]) => `<button data-s="${esc(s)}" class="${s === filter ? 'on' : ''}">${esc(label(s))} (${n})</button>`).join('');
+  $('chips').onclick = e => { const b = e.target.closest('button'); if (!b) return; filter = b.dataset.s;
+    [...$('chips').children].forEach(x => x.classList.toggle('on', x === b)); drawRecon(); };
+  drawRecon();
+} else {
+  $('reconsub').textContent = D.sheet_error ? 'The trade sheet could not be read: ' + D.sheet_error : 'No trade sheet folder is set up, so nothing was compared. Run SETUP.bat to choose it.';
+}
+
+$('fin').innerHTML = D.financial.length ? '<tr><th>Contract #</th><th>Type</th><th>Paired with</th><th>Side</th><th>Month</th><th class="n">Quantity</th><th class="n">Fixed price</th><th>Counterparty</th><th>Trade date</th><th>What it is</th></tr>' +
+  D.financial.map(f => `<tr><td>${esc(f.contract)}</td><td><span class="pill ${f.kind === 'SWAP' ? 'bad' : 'ok'}">${esc(f.kind)}</span></td><td>${esc(f.partner)}</td><td>${esc(f.side)}</td><td>${esc(f.term)}</td><td class="n">${num(f.quantity)} ${esc(f.unit)}</td><td class="n">${num(f.fixed_price, 2)} ${esc(f.price_unit)}</td><td>${esc(f.counterparty)}</td><td>${esc(f.trade_date)}</td><td class="note wrap">${esc(f.note)}</td></tr>`).join('')
+  : '<tr><td class="empty">No bank swaps in this run.</td></tr>';
+
+const cmax = Math.max(1, ...D.counterparties.map(c => Math.max(c.bought, c.sold)));
+$('cpty').innerHTML = D.counterparties.map(c => `<div class="bar"><div class="lab" title="${esc(c.name)}">${esc(c.name)}</div><div class="track">
+  <i style="left:0;width:${100*c.bought/cmax}%;background:var(--buy);height:50%"></i>
+  <i style="left:0;top:50%;width:${100*c.sold/cmax}%;background:var(--sell);height:50%"></i></div>
+  <div class="v">${c.trades} trade${c.trades === 1 ? '' : 's'}</div></div>`).join('') || '<p class="empty">No physical trades.</p>';
+
+$('att').innerHTML = D.attention.length ? '<ul class="att">' + D.attention.map(a => `<li><b>${esc(a.contract)}</b> ${esc(a.counterparty)}<ul>${a.flags.map(f => `<li>${esc(f)}</li>`).join('')}</ul></li>`).join('') + '</ul>' : '<p class="empty">Nothing flagged.</p>';
+$('foot').textContent = `Source: ${D.source}  |  ${D.build}  |  m3 to bbl at ${D.bbl_per_m3}`;
+</script>
+</body>
+</html>
+"""

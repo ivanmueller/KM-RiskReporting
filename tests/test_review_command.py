@@ -73,8 +73,8 @@ def test_old_format_without_fixed_price_gets_the_column_added(tmp_path):
 def test_checks_evidence_documents_and_issues(tmp_path):
     r = build_review(_zip(tmp_path), tmp_path / "out")
     wb = load_workbook(r.workbook)
-    assert wb.sheetnames == ["summary", "raw-data-format", "checks", "evidence", "names",
-                             "documents", "text", "issues"]
+    assert wb.sheetnames == ["summary", "raw-data-format", "checks", "evidence", "financial",
+                             "names", "documents", "text", "issues"]
     checks = {row[0]: row for row in wb["checks"].iter_rows(min_row=2, values_only=True)}
     assert checks["181000001"][6] == 106.12        # swap fixed price
     assert "AMENDED" in checks["90002"][9]

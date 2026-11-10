@@ -273,11 +273,23 @@ def cmd_review(args) -> int:
               "name as it appears on confirmations", file=sys.stderr)
         return 4
     result = build_review(args.source, args.out, format_path=args.format, us=args.us or None,
-                          names_path=args.names, use_names=not args.no_names)
+                          names_path=args.names, use_names=not args.no_names,
+                          results_root=args.results, trade_sheet=args.trade_sheet)
     print(format_summary(result))
     print(f"\nraw-data (your format + checks): {result.raw_data}")
-    print(f"review workbook (evidence, text, documents): {result.workbook}")
+    print(f"review workbook (evidence, trade sheet, swaps): {result.workbook}")
+    print(f"dashboard: {result.dashboard}")
     print("The summary above is counts only. The workbooks contain contract details.")
+    return 0
+
+
+def cmd_dashboard(args) -> int:
+    from riskparse.dashboard import serve
+    try:
+        serve(args.folder, port=args.port, open_browser=not args.no_browser)
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
+        return 4
     return 0
 
 
@@ -364,7 +376,20 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--us", action="append", default=[],
                     help="our company name as it appears on confirmations (repeatable; "
                          "default: Kingston Marketing)")
+    rv.add_argument("--results", help="folder that collects every run; each run makes a new "
+                                      "dated folder in it (default: contracts-data next to "
+                                      "the source)")
+    rv.add_argument("--trade-sheet", help="the master trade sheet, or the folder holding it "
+                                          "(exactly one workbook), to check the "
+                                          "confirmations against")
     rv.set_defaults(func=cmd_review)
+
+    db = sub.add_parser("dashboard", help="show a run's dashboard at a local address until "
+                                          "the window is closed")
+    db.add_argument("folder", help="a run folder, or the results folder (newest run is shown)")
+    db.add_argument("--port", type=int, default=8765)
+    db.add_argument("--no-browser", action="store_true", help="do not open the browser")
+    db.set_defaults(func=cmd_dashboard)
 
     pf = sub.add_parser("profile-documents", help="count and size contract documents by "
                                                   "folder/format/status (no DB)")
