@@ -8,7 +8,7 @@ rem  KM Risk Reporting - RUN
 rem
 rem  Double-click this file. It reads every confirmation in the contracts
 rem  folder chosen in SETUP.bat (which can be on L:), checks them against the
-rem  master trade sheet, writes raw-data.xlsx, review.xlsx and dashboard.html
+rem  monthly trade sheet and Libby's trade sheet, writes raw-data.xlsx, review.xlsx and dashboard.html
 rem  into a new dated folder in the results folder, opens that folder, and
 rem  shows the dashboard in the browser until this window is closed.
 rem  To change the folders, run SETUP.bat again.
@@ -26,9 +26,11 @@ set "SETTINGS=%LOCALAPPDATA%\KM-RiskReporting"
 set "CONTRACTS=%CD%\contracts"
 set "RESULTS="
 set "TRADESHEET="
+set "LIBBY="
 if exist "%SETTINGS%\contracts-folder.txt" set /p CONTRACTS=<"%SETTINGS%\contracts-folder.txt"
 if exist "%SETTINGS%\results-folder.txt" set /p RESULTS=<"%SETTINGS%\results-folder.txt"
 if exist "%SETTINGS%\tradesheet-folder.txt" set /p TRADESHEET=<"%SETTINGS%\tradesheet-folder.txt"
+if exist "%SETTINGS%\libby-sheet.txt" set /p LIBBY=<"%SETTINGS%\libby-sheet.txt"
 if defined RESULTS goto :results_known
 for %%I in ("%CONTRACTS%\..") do set "RESULTS=%%~fI"
 if "%RESULTS:~-1%"=="\" set "RESULTS=%RESULTS:~0,-1%"
@@ -39,6 +41,11 @@ if not defined TRADESHEET goto :ts_known
 if /i "%TRADESHEET%"=="none" goto :ts_known
 set TS_ARG=--trade-sheet "%TRADESHEET%"
 :ts_known
+set "LIBBY_ARG="
+if not defined LIBBY goto :libby_known
+if /i "%LIBBY%"=="none" goto :libby_known
+set LIBBY_ARG=--libby-sheet "%LIBBY%"
+:libby_known
 
 if exist "%CONTRACTS%\" goto :folder_found
 mkdir "%CONTRACTS%" 2>nul
@@ -70,7 +77,7 @@ exit /b 1
 echo.
 echo  Reading the confirmations in %CONTRACTS% ...
 echo.
-".venv\Scripts\riskparse.exe" review "%CONTRACTS%" --results "%RESULTS%" %TS_ARG%
+".venv\Scripts\riskparse.exe" review "%CONTRACTS%" --results "%RESULTS%" %TS_ARG% %LIBBY_ARG%
 set "RC=%ERRORLEVEL%"
 echo.
 if "%RC%"=="0" goto :done

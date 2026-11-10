@@ -41,9 +41,10 @@ def test_scripts_point_at_files_that_exist():
     assert "requirements\\lock.txt" in setup and (REPO / "requirements" / "lock.txt").is_file()
     assert "github.com/ivanmueller/KM-RiskReporting.git" in setup
     run = (REPO / "RUN.bat").read_text()
-    assert "riskparse.exe\" review \"%CONTRACTS%\" --results \"%RESULTS%\" %TS_ARG%" in run
+    assert "riskparse.exe\" review \"%CONTRACTS%\" --results \"%RESULTS%\" %TS_ARG% %LIBBY_ARG%" in run
     assert "riskparse.exe\" dashboard \"%RESULTS%\"" in run
-    for name in ("contracts-folder.txt", "results-folder.txt", "tradesheet-folder.txt"):
+    for name in ("contracts-folder.txt", "results-folder.txt", "tradesheet-folder.txt",
+                 "libby-sheet.txt"):
         assert name in run and name in setup          # SETUP writes what RUN reads
 
 

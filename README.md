@@ -3,7 +3,7 @@
 Reads the trade confirmations (PDF, Excel and Outlook emails from Modern Commodities, One
 Exchange, Marex, CalRock and the bank swap confirmations) and writes the trades into the
 firm's **raw-data format**, one row per trade, with a checks sheet for Risk. It checks every
-deal against the **master trade sheet**, sorts the bank swaps into rolls and forward hedges,
+deal against the **monthly trade sheet** and **Libby's trade sheet**, sorts the bank swaps into rolls and forward hedges,
 and shows the results as a **risk dashboard** in the browser.
 
 ## Use it (Windows)
@@ -14,9 +14,10 @@ and shows the results as a **risk dashboard** in the browser.
 | **Each time** | Put the confirmations in the contracts folder and double-click **`RUN.bat`**. The results folder and the dashboard open when it finishes. |
 
 SETUP asks where to install the program (on this computer, for example
-`C:\RiskCode\KM-RiskReporting`) and for three folders, which can be on the network (L:): the
-**contracts**, the **results** (each run makes a dated folder in it) and the **trade sheet**
-(the folder holding the one master trade sheet workbook).
+`C:\RiskCode\KM-RiskReporting`) and for four locations, which can be on the network (L:): the
+**contracts**, the **results** (each run makes a dated folder in it), the **monthly trade
+sheets** folder (`<Month> Trading <Year>` workbooks; the Trading tab is read) and **Libby's
+trade sheet**.
 
 **New computer:** download `SETUP.bat` from
 [GitHub](https://github.com/ivanmueller/KM-RiskReporting/blob/claude/risk-reporting-phase-1-x8u26q/SETUP.bat)
@@ -43,7 +44,8 @@ The folders you chose in SETUP, e.g. on L:
       raw-data.xlsx          the trades in the firm's format + checks sheet
       review.xlsx            the same + trade sheet check, bank swaps, evidence, names, ...
       dashboard.html         the risk dashboard (also opens in the browser after RUN)
-  4. Trade Sheet\            the master trade sheet: exactly one workbook, any name
+  4. Trade Sheet\            the monthly trade sheets: October Trading 2026.xlsm, ...
+  Libby's trade sheet        wherever it is kept (chosen in SETUP)
 ```
 
 In the program folder, only the two files in `config\` are yours to edit. Contracts and results

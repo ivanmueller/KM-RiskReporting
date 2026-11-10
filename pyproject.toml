@@ -35,7 +35,8 @@ riskparse = "riskparse.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-riskparse = ["db/migrations/script.py.mako", "db/migrations/*.py", "db/migrations/versions/*.py"]
+riskparse = ["db/migrations/script.py.mako", "db/migrations/*.py", "db/migrations/versions/*.py",
+             "assets/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -22,6 +22,7 @@ from riskparse.sheetcheck import (
     DIFFERENCES,
     FORWARD_HEDGE,
     MATCHED,
+    MONTH_NOT_COVERED,
     NO_CONFIRMATION,
     NO_CONFIRMATION_DIRECT,
     NOT_ON_SHEET,
@@ -37,6 +38,8 @@ from riskparse.tradesheet import (
     TradeSheetError,
     find_trade_sheet,
     load_trade_sheet,
+    monthly_month,
+    select_monthly,
 )
 from test_review_command import _zip
 
@@ -157,16 +160,16 @@ def test_review_checks_confirmations_against_the_trade_sheet(tmp_path):
     assert [(f.trade.contract_no, f.kind) for f in r.financial] == [("181000001", FORWARD_HEDGE)]
 
     wb = load_workbook(r.workbook)
-    assert "trade sheet" in wb.sheetnames and "financial" in wb.sheetnames
+    assert "monthly trade sheet" in wb.sheetnames and "financial" in wb.sheetnames
     checks = {row[0]: row for row in wb["checks"].iter_rows(min_row=2, values_only=True)}
-    assert checks["90001"][10] == "MATCHED 11001 (Nov CTS!row 3)"
+    assert checks["90001"][10] == "Monthly: MATCHED 11001 (October Trading 2026: Nov CTS!row 3)"
     assert checks["181000001"][10] == "FINANCIAL: FORWARD HEDGE"
-    rows = list(wb["trade sheet"].iter_rows(min_row=2, values_only=True))
+    rows = list(wb["monthly trade sheet"].iter_rows(min_row=2, values_only=True))
     assert any(x[0] == NO_CONFIRMATION and x[2] == "11005" for x in rows)
 
     text = format_summary(r)
     assert "physical confirmations matched           4 (2 with differences)" in text
-    assert "confirmations not on the trade sheet      1" in text
+    assert "confirmations not on it                   1" in text
     assert "1 brokered, 1 direct" in text
     assert "SYN" not in text and "-6.2" not in text            # still counts only
 
@@ -174,16 +177,16 @@ def test_review_checks_confirmations_against_the_trade_sheet(tmp_path):
 def test_without_a_trade_sheet_swaps_are_still_classified(tmp_path):
     r = build_review(_zip(tmp_path), tmp_path / "out")
     assert r.sheet_check is None and r.financial[0].kind == FORWARD_HEDGE
-    assert "Trade sheet: not compared" in format_summary(r)
+    assert "Trade sheets: not compared" in format_summary(r)
 
 
 def test_a_bad_trade_sheet_folder_does_not_stop_the_run(tmp_path):
     folder = write_trade_sheet(tmp_path / "ts")
     write_trade_sheet(folder, "Second.xlsx")
     r = build_review(_zip(tmp_path), tmp_path / "out", trade_sheet=folder)
-    assert r.sheet_check is None and "exactly one" in r.sheet_error
+    assert r.sheet_check is None and "has no workbook named" in r.sheet_error
     assert r.raw_data.is_file() and r.dashboard.is_file()
-    assert "Trade sheet: NOT READ" in format_summary(r)
+    assert "Monthly trade sheet: NOT READ" in format_summary(r)
     assert any(i[1] == "TRADE_SHEET_NOT_READ" for i in r.issues)
 
 
@@ -207,7 +210,7 @@ def _sheet(no, side, vol, cpty="SYN A", diff="-6", when=date(2026, 10, 1), broke
 def test_consistent_reduction_on_sales_is_apportionment():
     trades = [_trade("1", "SELL", "5000"), _trade("2", "SELL", "2500", diff="-6.5"),
               _trade("3", "SELL", "2500", cpty="SYN B Inc.")]
-    sheet = TradeSheet(None, datetime(2026, 11, 1), [
+    sheet = TradeSheet([], datetime(2026, 11, 1), [
         _sheet("11", "SELL", "4547"), _sheet("12", "SELL", "2274", diff="-6.5"),
         _sheet("13", "SELL", "2400", cpty="SYN B")])
     c = check_against_sheet(trades, sheet, None)
@@ -219,7 +222,7 @@ def test_consistent_reduction_on_sales_is_apportionment():
 
 def test_higher_volume_or_a_buy_mismatch_is_a_difference():
     c = check_against_sheet([_trade("1", "BUY", "5000"), _trade("2", "SELL", "2500")],
-                            TradeSheet(None, datetime(2026, 11, 1), [
+                            TradeSheet([], datetime(2026, 11, 1), [
                                 _sheet("11", "BUY", "4500"), _sheet("12", "SELL", "2600")]),
                             None)
     assert {r.trade.contract_no: r.status for r in c.rows} == {"1": DIFFERENCES,
@@ -228,7 +231,7 @@ def test_higher_volume_or_a_buy_mismatch_is_a_difference():
 
 def test_keys_must_agree_and_the_best_candidate_wins():
     t = _trade("1", "SELL", "2500", diff="-5.75", when=date(2026, 10, 8))
-    sheet = TradeSheet(None, datetime(2026, 11, 1), [
+    sheet = TradeSheet([], datetime(2026, 11, 1), [
         _sheet("21", "SELL", "2500", diff="-5.75", when=date(2026, 10, 2), broker="CR"),
         _sheet("22", "SELL", "2500", diff="-5.75", when=date(2026, 10, 8)),     # best
         _sheet("23", "BUY", "2500", diff="-5.75", when=date(2026, 10, 8)),      # wrong side
@@ -269,11 +272,14 @@ def test_dashboard_page_holds_the_results(tmp_path):
     assert r.dashboard == tmp_path / "out" / FILE
     html, data = _dashboard_data(r.dashboard)
     assert "https://" not in html and "http://" not in html     # nothing loaded from outside
-    assert data["kpi"]["physical"] == 5 and data["kpi"]["matched"] == 4
-    assert data["kpi"]["missing"] == 2 and data["kpi"]["not_on_sheet"] == 1
-    assert data["trade_sheet"]["file"] == "October Trading 2026.xlsx"
+    src = data["sources"][0]
+    assert data["kpi"]["physical"] == 5 and src["kpi"]["matched"] == 4
+    assert src["kpi"]["missing"] == 2 and src["kpi"]["not_on_sheet"] == 1
+    assert src["files"] == ["October Trading 2026.xlsx"]
+    assert src["named"] == "the monthly trade sheet"
+    assert data["logo"].startswith("data:image/png;base64,")
     checks = {c["check"]: c for c in data["checks"]}
-    assert not checks["Physical confirmations not on the trade sheet"]["ok"]
+    assert not checks["Physical confirmations not on the monthly trade sheet"]["ok"]
     assert checks["Documents no parser recognised"]["ok"] is False      # the random letter
     assert {p["month"] for p in data["conf_position"]} == {"NOV-26"}
     assert data["financial"][0]["kind"] == FORWARD_HEDGE
@@ -285,7 +291,7 @@ def test_dashboard_data_cannot_break_out_of_its_script_tag(tmp_path):
     from riskparse.dashboard import write_dashboard
     html, data = _dashboard_data(write_dashboard(r, tmp_path))
     assert "</script><script>alert" not in html
-    assert any(p["counterparty"].startswith("</script>") for p in data["physical"])
+    assert any(c["name"].startswith("</script>") for c in data["counterparties"])
 
 
 def test_dashboard_server_is_local_and_serves_only_the_page(tmp_path):
@@ -315,5 +321,87 @@ def test_cli_results_folder_trade_sheet_and_dashboard(tmp_path, capsys):
     out = capsys.readouterr().out
     runs = list(results.iterdir())
     assert len(runs) == 1 and (runs[0] / "raw-data.xlsx").is_file()
-    assert "Trade sheet: October Trading 2026.xlsx" in out and "dashboard:" in out
+    assert "Monthly trade sheet: October Trading 2026.xlsx" in out and "dashboard:" in out
     assert main(["dashboard", str(tmp_path / "nothing-here")]) == 4
+
+
+# --------------------------------------------------------------------------- monthly sheets
+
+def _wb(path, tabs):
+    wb = Workbook()
+    wb.remove(wb.active)
+    for name, rows in tabs.items():
+        ws = wb.create_sheet(name)
+        for r in rows:
+            ws.append(r)
+    wb.save(path)
+
+
+def test_monthly_workbook_is_chosen_by_its_name(tmp_path):
+    for name in ("September Trading 2026.xlsm", "October Trading 2026.xlsm",
+                 "Nov Trading 2026.xlsx", "notes.xlsx"):
+        (tmp_path / name).write_bytes(b"")
+    (tmp_path / "~$October Trading 2026.xlsm").write_bytes(b"")
+    assert monthly_month(tmp_path / "Nov Trading 2026.xlsx") == date(2026, 11, 1)
+    assert monthly_month(tmp_path / "notes.xlsx") is None
+    paths, missing = select_monthly(tmp_path, {date(2026, 11, 1)}, today=date(2026, 10, 15))
+    assert [p.name for p in paths] == ["October Trading 2026.xlsm", "Nov Trading 2026.xlsx"]
+    assert missing == []
+    paths, missing = select_monthly(tmp_path, {date(2026, 11, 1)}, today=date(2026, 12, 2))
+    assert [p.name for p in paths] == ["Nov Trading 2026.xlsx"]
+    assert missing == ["December Trading 2026"]
+    with pytest.raises(TradeSheetError, match="no workbook named January Trading 2027"):
+        select_monthly(tmp_path, (), today=date(2027, 1, 5))
+
+
+def test_only_the_trading_tab_and_not_the_what_if_block(tmp_path):
+    deal = _row(11836, datetime(2026, 10, 2), "SYN Refining", "Libby", "Sell", -2500, "LSB",
+                "Can", datetime(2026, 10, 1), "Fixed", -7, "Modern")
+    what_if = _row(None, None, None, None, "Buy", None, "LSB", "Can", None, "Fixed", -2,
+                   "Direct", "What if  Buy")
+    total = _row(None, None, None, None, "Buy", -1783.4, "LSB", None, None, "Index", None,
+                 None, "Short Before What If Deals")
+    after_header = _row(99999, datetime(2026, 10, 3), "SYN Late", "Libby", "Buy", 100, "LSB",
+                        "Can", datetime(2026, 10, 1), "Fixed", -1, "Direct")
+    _wb(tmp_path / "October Trading 2026.xlsm", {
+        "Summary": [["not a trade table"]],
+        "Trading": [HEAD, deal, total, [], HEAD, what_if, after_header],
+        "Trading - MTR ": [HEAD, _row(5, datetime(2026, 10, 2), "SYN Mitsue", "Wade", "Buy",
+                                      10, "WH", "Can", datetime(2026, 10, 1), "Index", None,
+                                      "Direct")]})
+    sheet = load_trade_sheet(tmp_path, monthly=True, months={date(2026, 10, 1)},
+                             today=date(2026, 10, 20), label="monthly trade sheet")
+    assert sheet.sheets_read == ["Trading (October Trading 2026)"]
+    assert [t.internal_contract for t in sheet.trades] == ["11836"]
+    assert sheet.trades[0].where == "October Trading 2026: Trading!row 2"
+
+
+def test_validated_against_both_trade_sheets(tmp_path):
+    monthly = tmp_path / "4. Trade Sheet"
+    monthly.mkdir()
+    # the October workbook holds October deliveries only: the November confirmations'
+    # month is not on it, which is not a break
+    _wb(monthly / "October Trading 2026.xlsm", {"Trading": [HEAD, _row(
+        11836, datetime(2026, 10, 2), "SYN Old Co", "Libby", "Sell", -2500, "LSB", "Can",
+        datetime(2026, 10, 1), "Fixed", -7, "Modern")]})
+    libby = write_trade_sheet(tmp_path / "Libby")
+    r = build_review(_zip(tmp_path), tmp_path / "out", trade_sheet=monthly, libby_sheet=libby)
+    assert [c.sheet.label for c in r.sheet_checks] == ["monthly trade sheet",
+                                                       "Libby's trade sheet"]
+    first, second = r.sheet_checks
+    assert {row.status for row in first.rows if row.trade} == {MONTH_NOT_COVERED}
+    assert first.sheet.missing == ["November Trading 2026"] or first.sheet.missing == []
+    assert second.for_trade(next(t for t in r.trades if t.contract_no == "90001")).status \
+        == MATCHED
+    wb = load_workbook(r.workbook)
+    assert {"monthly trade sheet", "Libby's trade sheet"} <= set(wb.sheetnames)
+    checks = {row[0]: row for row in wb["checks"].iter_rows(min_row=2, values_only=True)}
+    assert checks["90001"][10].splitlines() == [
+        "Monthly: MONTH NOT ON THIS SHEET", "Libby's: MATCHED 11001 (Nov CTS!row 3)"]
+    flags = next(t for t in r.trades if t.contract_no == "82999001").flags
+    assert "not on Libby's trade sheet" in flags
+    assert not any("monthly" in f for f in flags)          # its month is not on that sheet
+    html, data = _dashboard_data(r.dashboard)
+    assert [s["named"] for s in data["sources"]] == ["the monthly trade sheet",
+                                                    "Libby's trade sheet"]
+    assert data["kpi"]["validated_all"] == 0

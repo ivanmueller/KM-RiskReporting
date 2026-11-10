@@ -103,8 +103,8 @@ class ReviewResult:
     format_file: Path | None = None                          # None: built-in columns
     name_map: NameMap | None = None
     names: list[list] = field(default_factory=list)      # names sheet rows
-    sheet_check: SheetCheck | None = None                # None: no trade sheet compared
-    sheet_error: str = ""                                # why the trade sheet was not read
+    sheet_checks: list[SheetCheck] = field(default_factory=list)   # one per trade sheet read
+    sheet_errors: dict[str, str] = field(default_factory=dict)      # label -> why not read
     financial: list = field(default_factory=list)        # FinancialRow per bank swap
     dashboard: Path | None = None
     source: str = ""
@@ -112,6 +112,15 @@ class ReviewResult:
 
     def counts(self) -> Counter:
         return Counter((d["folder_class"], d["type"], d["status"]) for d in self.documents)
+
+    @property
+    def sheet_check(self) -> SheetCheck | None:
+        """The first trade sheet compared (the monthly one when both are given)."""
+        return self.sheet_checks[0] if self.sheet_checks else None
+
+    @property
+    def sheet_error(self) -> str:
+        return "; ".join(f"{k}: {v}" for k, v in self.sheet_errors.items())
 
 
 def _clean(value):
@@ -134,8 +143,10 @@ def _put(ws, row: int, values: list) -> None:
 
 
 REVIEW_ROOT = "contracts-data"
+MONTHLY_LABEL = "monthly trade sheet"
+LIBBY_LABEL = "Libby's trade sheet"
 # Bump with every change to the output, so a printed summary shows which code produced it.
-REVIEW_BUILD = "2026-11-10a (trade sheet check, bank swaps, dashboard)"
+REVIEW_BUILD = "2026-11-10b (two trade sheets, dashboard logo)"
 
 
 def default_out_dir(src: Path, now: datetime | None = None) -> Path:
@@ -150,13 +161,16 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
                  names_path: str | Path | None = None,
                  use_names: bool = True,
                  results_root: str | Path | None = None,
-                 trade_sheet: str | Path | None = None) -> ReviewResult:
+                 trade_sheet: str | Path | None = None,
+                 libby_sheet: str | Path | None = None) -> ReviewResult:
     """``format_path`` defaults to ``config/raw-data-format.xlsx`` and ``names_path`` to
     ``config/counterparty_map.csv``, looked for in the current folder, then the repository.
 
     ``results_root``: the folder that collects every run (a new dated folder is made in it
     each time); default ``contracts-data`` next to the source. ``out_dir`` overrides both.
-    ``trade_sheet``: the master trade sheet, or the folder holding it, to compare with."""
+    ``trade_sheet``: the monthly trade sheet folder (``<Month> Trading <Year>`` workbooks,
+    Trading tab), or one workbook. ``libby_sheet``: Libby's trade sheet (a workbook, or the
+    folder holding it). The confirmations are checked against each one given."""
     src = Path(source)
     if not src.exists():
         raise ReviewError(f"{src} does not exist")
@@ -228,16 +242,22 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     result.names = _name_rows(result.parsed, nmap)
     apply_name_map(result.trades, nmap)
     _price_flags(result)
-    if trade_sheet is not None:
+    result.financial = classify_financial([t for t in result.trades if is_financial(t)])
+    months = {month_of(t.start_date) for t in result.trades
+              if t.start_date and not is_financial(t)}
+    for label, location, monthly in ((MONTHLY_LABEL, trade_sheet, True),
+                                     (LIBBY_LABEL, libby_sheet, False)):
+        if location is None:
+            continue
         try:
-            result.sheet_check = check_against_sheet(result.trades, load_trade_sheet(trade_sheet),
-                                                     nmap)
-            result.financial = result.sheet_check.financial
+            sheet = load_trade_sheet(location, monthly=monthly, months=months, label=label)
+            result.sheet_checks.append(check_against_sheet(result.trades, sheet, nmap))
         except TradeSheetError as exc:
-            result.sheet_error = str(exc)
-            result.issues.append((str(trade_sheet), "TRADE_SHEET_NOT_READ", str(exc)))
-    if result.sheet_check is None:
-        result.financial = classify_financial([t for t in result.trades if is_financial(t)])
+            result.sheet_errors[label] = str(exc)
+            result.issues.append((str(location), "TRADE_SHEET_NOT_READ", f"{label}: {exc}"))
+    for f in result.financial:
+        f.trade.flags.append(f"financial ({f.kind.lower()}): bank swap, not on the trade "
+                             "sheets by design")
     _write_raw_data(result)
     _write_review(result, text_rows, src)
     from riskparse.dashboard import write_dashboard
@@ -318,18 +338,25 @@ def _format_rows(result: ReviewResult):
         yield [cell_value(t, a) if (a := attr_for(h)) else None for h in result.format_headers]
 
 
+def _short(label: str) -> str:
+    return label.split()[0].capitalize()          # "Monthly", "Libby's"
+
+
 def _sheet_status(result: ReviewResult, t: Trade) -> str:
     fin = next((f for f in result.financial if f.trade is t), None)
     if fin is not None:
         return f"FINANCIAL: {fin.kind}" + (f" with {fin.partner.contract_no}" if fin.partner
                                             else "")
-    if result.sheet_check is None:
-        return "not compared" + (f" ({result.sheet_error})" if result.sheet_error else "")
-    row = result.sheet_check.for_trade(t)
-    if row is None:
-        return ""
-    return row.status + (f" {row.sheet.internal_contract or ''} ({row.sheet.where})"
-                         if row.sheet else "")
+    lines = []
+    for c in result.sheet_checks:
+        row = c.for_trade(t)
+        if row is not None:
+            lines.append(f"{_short(c.sheet.label)}: {row.status}"
+                         + (f" {row.sheet.internal_contract or ''} ({row.sheet.where})"
+                            if row.sheet else ""))
+    for label, err in result.sheet_errors.items():
+        lines.append(f"{_short(label)}: not read ({err})")
+    return "\n".join(lines) or "not compared"
 
 
 def _check_rows(result: ReviewResult):
@@ -339,8 +366,8 @@ def _check_rows(result: ReviewResult):
                "\n".join(t.flags), _sheet_status(result, t), None, None, None]
 
 
-def _sheet_rows(result: ReviewResult):
-    for r in result.sheet_check.rows:
+def _sheet_rows(check: SheetCheck):
+    for r in check.rows:
         t, s = r.trade, r.sheet
         yield [r.status, t.contract_no if t else None,
                s.internal_contract if s else None, s.where if s else None,
@@ -411,9 +438,9 @@ def _write_review(result: ReviewResult, text_rows: list, src: Path) -> None:
     _fill(wb.create_sheet("evidence"), ["row", "Contract #", "column", "value",
                                         "where it came from (location: text as written)",
                                         "doc", "file"], ev, [5, 22, 18, 22, 80, 7, 50])
-    if result.sheet_check is not None:
-        _fill(wb.create_sheet("trade sheet"), SHEET_COLUMNS, _sheet_rows(result),
-              [26, 14, 16, 18, 6, 34, 18, 8, 9, 16, 12, 11, 11, 12, 12, 22, 12, 10, 10, 60, 60])
+    for check in result.sheet_checks:
+        _fill(wb.create_sheet(check.sheet.label[:31]), SHEET_COLUMNS, _sheet_rows(check),
+              [26, 14, 16, 30, 6, 34, 18, 8, 9, 16, 12, 11, 11, 12, 12, 22, 12, 10, 10, 60, 60])
     if result.financial:
         _fill(wb.create_sheet("financial"), FINANCIAL_COLUMNS, _financial_rows(result),
               [14, 14, 14, 6, 9, 10, 6, 10, 10, 26, 12, 90])
@@ -430,11 +457,9 @@ def _write_review(result: ReviewResult, text_rows: list, src: Path) -> None:
 
 
 _FLAG_KINDS = (("swap: no trader", "swap: no trader named on the confirmation"),
-               ("trade sheet: not", "not on the trade sheet"),
-               ("trade sheet differs", "differs from the trade sheet"),
-               ("financial (roll)", "bank swap: roll (not on the trade sheet by design)"),
+               ("financial (roll)", "bank swap: roll (not on the trade sheets by design)"),
                ("financial (forward hedge)", "bank swap: forward hedge (not on the trade "
-                                             "sheet by design)"),
+                                             "sheets by design)"),
                ("financial (swap)", "bank swap: single swap - check what it hedges"),
                ("price currency", "price currency not stated"),
                ("counterparty '", "counterparty not in the counterparty map"),
@@ -457,18 +482,23 @@ def _sheet_summary(result: ReviewResult) -> list[str]:
     from riskparse import sheetcheck as sc
     fin = Counter(f.kind for f in result.financial)
     lines = []
-    if result.sheet_check is None:
-        lines.append("Trade sheet: " + (f"NOT READ - {result.sheet_error}" if result.sheet_error
-                                        else "not compared (no trade sheet folder given)"))
-    else:
-        c = result.sheet_check
-        lines.append(f"Trade sheet: {c.sheet.path.name} ({len(c.sheet.trades)} rows from "
-                     f"{len(c.sheet.sheets_read)} tab(s))")
+    if not result.sheet_checks and not result.sheet_errors:
+        lines.append("Trade sheets: not compared (no trade sheet folder given)")
+    for label, err in result.sheet_errors.items():
+        lines.append(f"{label[0].upper()}{label[1:]}: NOT READ - {err}")
+    for c in result.sheet_checks:
+        lines.append(f"{c.sheet.label[0].upper()}{c.sheet.label[1:]}: {c.sheet.names} "
+                     f"({len(c.sheet.trades)} rows from {len(c.sheet.sheets_read)} tab(s))")
+        if c.sheet.missing:
+            lines.append(f"  not in the folder yet: {', '.join(c.sheet.missing)}")
         lines.append(f"  physical confirmations matched           "
                      f"{c.count(sc.MATCHED) + c.count(sc.DIFFERENCES)}"
                      f" ({c.count(sc.DIFFERENCES)} with differences)")
-        lines.append(f"  confirmations not on the trade sheet      {c.count(sc.NOT_ON_SHEET)}")
-        lines.append(f"  trade sheet deals with no confirmation    "
+        lines.append(f"  confirmations not on it                   {c.count(sc.NOT_ON_SHEET)}")
+        if c.count(sc.MONTH_NOT_COVERED):
+            lines.append(f"  confirmations for months it does not hold "
+                         f"{c.count(sc.MONTH_NOT_COVERED)}")
+        lines.append(f"  its deals with no confirmation            "
                      f"{c.count(sc.NO_CONFIRMATION)} brokered, "
                      f"{c.count(sc.NO_CONFIRMATION_DIRECT)} direct (in the confirmation period)")
     lines.append(f"Bank swaps: {fin.get(sc.ROLL, 0) // 2} roll(s) of two swaps, "

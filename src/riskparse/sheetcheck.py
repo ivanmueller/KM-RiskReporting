@@ -9,13 +9,16 @@ How the two sources relate (from the October data and the desk's explanation):
   several candidates.
 * **Volumes**: buys agree exactly. Sales at Cromer are often lower on the trade sheet by
   the same percentage for every sale to the same counterparty in the same month (for
-  example 91% of 5,000 m3 and 91% of 2,500 m3): the desk records the apportioned volume. A consistent percentage is reported as a note; a one-off or a higher
-  trade sheet volume is a difference to check.
+  example 91% of 5,000 m3 and 91% of 2,500 m3): the desk records the apportioned volume.
+  A consistent percentage is reported as a note; a one-off or a higher trade sheet volume
+  is a difference to check.
 * **Financial swaps** (National Bank of Canada, ISDA) are not on the trade sheet by design.
   A **roll** is two swaps (four legs: a fixed and a floating leg each) on the same day, for
   the same volume, one buying and one selling consecutive months. A swap a quarter or more
   ahead of its trade date is a **forward hedge** (for example fixed-price barrels bought
   from a producer and hedged with the bank).
+* A confirmation whose delivery month has no rows at all on a sheet (the monthly workbook
+  for that month is not in the folder yet) is **month not on this sheet**, not a break.
 * Trade sheet deals dated inside the confirmations' date range but with no confirmation
   are **missing confirmations**; standing agreements (Evergreen / Term rows), internal rows
   (KM, opening inventory) and deals outside that range are counted, not flagged.
@@ -37,11 +40,12 @@ from riskparse.tradesheet import SheetTrade, TradeSheet
 MATCHED = "MATCHED"
 DIFFERENCES = "MATCHED - CHECK DIFFERENCES"
 NOT_ON_SHEET = "NOT ON TRADE SHEET"
+MONTH_NOT_COVERED = "MONTH NOT ON THIS SHEET"
 NO_CONFIRMATION = "NO CONFIRMATION"
 NO_CONFIRMATION_DIRECT = "NO CONFIRMATION (direct deal)"
 OUTSIDE_PERIOD = "OUTSIDE CONFIRMATION PERIOD"
 STATUS_ORDER = (DIFFERENCES, NOT_ON_SHEET, NO_CONFIRMATION, NO_CONFIRMATION_DIRECT, MATCHED,
-                OUTSIDE_PERIOD)
+                MONTH_NOT_COVERED, OUTSIDE_PERIOD)
 
 ROLL = "ROLL"
 FORWARD_HEDGE = "FORWARD HEDGE"
@@ -268,6 +272,7 @@ def classify_financial(swaps: list[Trade]) -> list[FinancialRow]:
 
 def check_against_sheet(trades: list[Trade], sheet: TradeSheet,
                         nmap: NameMap | None) -> SheetCheck:
+    """``sheet.label`` names the source in flags ("not on the monthly trade sheet")."""
     physical = [t for t in trades if not is_financial(t)]
     result = SheetCheck(sheet, financial=classify_financial(
         [t for t in trades if is_financial(t)]))
@@ -302,8 +307,13 @@ def check_against_sheet(trades: list[Trade], sheet: TradeSheet,
             r.status = DIFFERENCES
     result.rows.extend(matched)
 
+    covered = {s.delivery_month for s in sheet.trades}
     for t in physical:
         if id(t) not in taken_t:
+            if month_of(t.start_date) not in covered:
+                result.rows.append(CheckRow(MONTH_NOT_COVERED, t, notes=[
+                    f"{sheet.named} has no {month_label(month_of(t.start_date))} rows"]))
+                continue
             row = CheckRow(NOT_ON_SHEET, t)
             near = [s for s in sheet.trades if id(s) not in taken_s and s.side == t.side
                     and s.delivery_month == month_of(t.start_date)
@@ -338,11 +348,9 @@ def check_against_sheet(trades: list[Trade], sheet: TradeSheet,
         if r.trade is None:
             continue
         if r.status == NOT_ON_SHEET:
-            r.trade.flags.append("trade sheet: not on the trade sheet")
+            r.trade.flags.append(f"not on {sheet.named}")
         elif r.status == DIFFERENCES:
-            r.trade.flags.append("trade sheet differs: " + "; ".join(r.differences))
-    for f in result.financial:
-        f.trade.flags.append(f"financial ({f.kind.lower()}): not on the trade sheet by design")
+            r.trade.flags.append(f"differs from {sheet.named}: " + "; ".join(r.differences))
     result.rows.sort(key=lambda r: (STATUS_ORDER.index(r.status),
                                     (r.trade.trade_date if r.trade else r.sheet.trade_date)
                                     or date.max))
