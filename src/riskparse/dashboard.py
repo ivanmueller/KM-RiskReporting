@@ -2,9 +2,10 @@
 """The run's risk dashboard: one self-contained HTML page, and a temporary local server.
 
 ``write_dashboard`` turns a review result (parsed confirmations, the trade sheet check and
-the swaps) into ``dashboard.html`` in the run folder: a floating checks button on the left
-(a checkmark when every check is OK, a flag with a count when not; it slides out a panel
-listing each check, what failed and a link to it), key figures, positions by delivery month and grade, the trade sheet reconciliation, the bank
+the swaps) into ``dashboard.html`` in the run folder: floating buttons on the left for the
+checks (a checkmark when every check is OK, a flag with a count when not; it slides out a
+panel listing each check, what failed and a link to it) and for export (the daily risk
+report PDF and Excel, raw-data.xlsx, review.xlsx), key figures, positions by delivery month and grade, the trade sheet reconciliation, the bank
 swaps and the counterparties. Everything is embedded in the page (no internet, no
 libraries), so it also opens straight from the folder.
 
@@ -225,8 +226,27 @@ def build_data(result) -> dict:
     }
 
 
-def write_dashboard(result, out_dir: Path) -> Path:
-    data = json.dumps(build_data(result), default=str).replace("</", "<\\/")
+EXPORT_LABELS = (("Risk Report - CTT Position Summary", ".pdf", "Daily risk report (PDF)"),
+                 ("Risk Report - CTT Position Summary", ".xlsx", "Daily risk report (Excel)"),
+                 ("raw-data", ".xlsx", "raw-data.xlsx (firm's format + checks)"),
+                 ("review", ".xlsx", "review.xlsx (evidence, trade sheet, swaps)"))
+
+
+def exports(folder: Path) -> list[dict]:
+    """The run's files the dashboard offers for download (newest report first)."""
+    out = []
+    for stem, suffix, label in EXPORT_LABELS:
+        found = sorted((p for p in Path(folder).glob(f"{stem}*{suffix}") if p.is_file()),
+                       reverse=True)
+        if found:
+            out.append({"file": found[0].name, "label": label})
+    return out
+
+
+def write_dashboard(result, out_dir: Path, data: dict | None = None) -> Path:
+    data = dict(data or build_data(result))
+    data["exports"] = exports(out_dir)
+    data = json.dumps(data, default=str).replace("</", "<\\/")
     path = Path(out_dir) / FILE
     path.write_text(TEMPLATE.replace("__DATA__", data), encoding="utf-8")
     return path
@@ -248,18 +268,34 @@ def find_dashboard(location: str | Path) -> Path:
 def make_server(location: str | Path, port: int = DEFAULT_PORT):
     """A server for the dashboard on this computer only (127.0.0.1): (server, url).
     Tries ``port`` and the next 19 if it is taken."""
-    page = find_dashboard(location).read_bytes()
+    page_path = find_dashboard(location)
+    page = page_path.read_bytes()
+    # only the run's own export files, by exact name: nothing else in the folder is served
+    files = {e["file"]: page_path.parent / e["file"] for e in exports(page_path.parent)}
+    types = {".pdf": "application/pdf",
+             ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):          # noqa: N802 (http.server's name)
-            if self.path.split("?")[0] not in ("/", "/" + FILE):
+            from urllib.parse import unquote
+            name = unquote(self.path.split("?")[0]).lstrip("/")
+            if name in ("", FILE):
+                body, ctype, extra = page, "text/html; charset=utf-8", {}
+            elif name in files:
+                body = files[name].read_bytes()
+                ctype = types.get(files[name].suffix.lower(), "application/octet-stream")
+                disposition = "inline" if name.lower().endswith(".pdf") else "attachment"
+                extra = {"Content-Disposition": f'{disposition}; filename="{name}"'}
+            else:
                 self.send_error(404)
                 return
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", ctype)
             self.send_header("Cache-Control", "no-store")
+            for k, v in extra.items():
+                self.send_header(k, v)
             self.end_headers()
-            self.wfile.write(page)
+            self.wfile.write(body)
 
         def log_message(self, *args):
             pass
@@ -348,12 +384,22 @@ gap:8px;margin:4px 0}.bar .lab{white-space:nowrap;overflow:hidden;text-overflow:
 ul.att{margin:0;padding-left:18px}ul.att li{margin:2px 0}
 .note{color:var(--muted);font-size:12px}.empty{color:var(--muted);font-style:italic}
 main{max-width:1460px;padding-left:84px}
-#railbtn{position:fixed;left:18px;top:50%;transform:translateY(-50%);z-index:30;width:52px;
-height:52px;border-radius:50%;border:1px solid var(--line);cursor:pointer;display:grid;
-place-items:center;background:var(--panel);box-shadow:0 4px 14px rgba(15,23,42,.22);
+.fab{position:fixed;left:18px;z-index:30;width:52px;height:52px;border-radius:50%;
+border:1px solid var(--line);cursor:pointer;display:grid;place-items:center;
+background:var(--panel);box-shadow:0 4px 14px rgba(15,23,42,.22);
 transition:transform .15s ease,box-shadow .15s ease}
-#railbtn:hover{transform:translateY(-50%) scale(1.06);box-shadow:0 6px 18px rgba(15,23,42,.28)}
-#railbtn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.fab:hover{transform:scale(1.06);box-shadow:0 6px 18px rgba(15,23,42,.28)}
+.fab:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#railbtn{top:calc(50% - 60px)}#exportbtn{top:calc(50% + 8px);color:var(--ink)}
+#exportmenu{position:fixed;left:82px;top:calc(50% - 4px);z-index:31;background:var(--panel);
+border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(15,23,42,.22);
+padding:6px;min-width:290px;display:none}
+#exportmenu.open{display:block}
+#exportmenu .t{font-size:12px;color:var(--muted);padding:6px 10px 4px}
+#exportmenu a{display:flex;gap:10px;align-items:center;padding:8px 10px;border-radius:8px;
+color:var(--ink);text-decoration:none}
+#exportmenu a:hover,#exportmenu a:focus-visible{background:var(--chip);outline:none}
+#exportmenu a small{display:block;color:var(--muted);font-size:11px}
 #railbtn.ok{color:var(--ok)}#railbtn.bad{color:var(--bad)}
 #railbtn .badge{position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;
 border-radius:10px;background:#d92d20;color:#fff;font-size:11px;font-weight:700;
@@ -379,12 +425,15 @@ font-size:22px;line-height:1;cursor:pointer;color:var(--muted)}
 color:var(--ink);border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit;font-size:12px}
 section.flash{animation:flash 1.6s ease}
 @keyframes flash{0%,40%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:none}}
-@media (max-width:700px){main{padding-left:16px}#railbtn{top:auto;bottom:18px;left:14px;
-transform:none;width:48px;height:48px}#railbtn:hover{transform:scale(1.06)}}
+@media (max-width:700px){main{padding-left:16px}.fab{left:14px;width:48px;height:48px}
+#railbtn{top:auto;bottom:76px}#exportbtn{top:auto;bottom:18px}
+#exportmenu{left:72px;top:auto;bottom:18px}}
 </style>
 </head>
 <body>
-<button id="railbtn" aria-expanded="false" aria-controls="panel" title="Checks"></button>
+<button id="railbtn" class="fab" aria-expanded="false" aria-controls="panel" title="Checks"></button>
+<button id="exportbtn" class="fab" aria-expanded="false" aria-controls="exportmenu" title="Export"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></button>
+<div id="exportmenu" role="menu" aria-label="Export"></div>
 <div id="scrim"></div>
 <aside id="panel" aria-label="Checks" aria-hidden="true">
 <button class="close" id="panelclose" aria-label="Close">&times;</button>
@@ -454,7 +503,7 @@ const ICON_OK = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="current
 const ICON_FLAG = '<svg class="ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 2a1 1 0 0 1 1 1v.6c1.3-.6 2.9-.9 4.6-.4 1.3.4 2.3 1.1 3.6 1.4 1.4.3 2.9.1 4.4-.7a1 1 0 0 1 1.4.9v9.4a1 1 0 0 1-.5.9c-1.9 1.1-3.9 1.4-5.8 1-1.5-.3-2.6-1-3.7-1.4-1.3-.4-2.6-.2-4 .5V21a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1z"/></svg>';
 const failing = D.checks.filter(c => !c.ok);
 const railbtn = $('railbtn'), panel = $('panel'), scrim = $('scrim');
-railbtn.className = failing.length ? 'bad' : 'ok';
+railbtn.classList.add(failing.length ? 'bad' : 'ok');
 railbtn.innerHTML = (failing.length ? ICON_FLAG : ICON_OK).replace('class="ic"', 'width="24" height="24"') +
   (failing.length ? `<span class="badge">${failing.length}</span>` : '');
 railbtn.title = failing.length ? `${failing.length} check(s) need a look` : 'All checks OK';
@@ -470,7 +519,21 @@ function openPanel(open) {
 }
 railbtn.onclick = () => openPanel(!panel.classList.contains('open'));
 scrim.onclick = $('panelclose').onclick = () => openPanel(false);
-document.addEventListener('keydown', e => { if (e.key === 'Escape') openPanel(false); });
+const exportbtn = $('exportbtn'), exportmenu = $('exportmenu');
+const FILE_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>';
+if ((D.exports || []).length) {
+  exportmenu.innerHTML = '<div class="t">Export this run</div>' + D.exports.map(x => {
+    const pdf = x.file.toLowerCase().endsWith('.pdf');
+    return `<a role="menuitem" href="${encodeURIComponent(x.file)}" ${pdf ? 'target="_blank" rel="noopener"' : 'download'}>${FILE_ICON}<span>${esc(x.label)}<small>${esc(x.file)}</small></span></a>`;
+  }).join('');
+} else { exportbtn.remove(); exportmenu.remove(); }
+function openExport(open) {
+  if (!exportmenu.isConnected) return;
+  exportmenu.classList.toggle('open', open); exportbtn.setAttribute('aria-expanded', open);
+}
+exportbtn.onclick = e => { e.stopPropagation(); openExport(!exportmenu.classList.contains('open')); };
+document.addEventListener('click', e => { if (!e.target.closest('#exportmenu')) openExport(false); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { openPanel(false); openExport(false); } });
 $('cklist').onclick = e => {
   const b = e.target.closest('button.go'); if (!b) return;
   const j = D.checks[+b.dataset.k].jump;

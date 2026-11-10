@@ -43,6 +43,7 @@ The folders you chose in SETUP, e.g. on L:
       raw-data.xlsx          the trades in the firm's format + checks sheet
       review.xlsx            the same + trade sheet check, bank swaps, evidence, names, ...
       dashboard.html         the risk dashboard (also opens in the browser after RUN)
+      Risk Report - CTT Position Summary - <date>.pdf / .xlsx   the daily risk report
   4. Trade Sheet\            the monthly trade sheets: October Trading 2026.xlsm, ...
 ```
 

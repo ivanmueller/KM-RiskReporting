@@ -294,17 +294,25 @@ def test_dashboard_data_cannot_break_out_of_its_script_tag(tmp_path):
     assert any(c["name"].startswith("</script>") for c in data["counterparties"])
 
 
-def test_dashboard_server_is_local_and_serves_only_the_page(tmp_path):
+def test_dashboard_server_is_local_and_serves_only_the_page_and_exports(tmp_path):
+    from urllib.parse import quote
     r = build_review(_zip(tmp_path), tmp_path / "results" / "run1")
     assert find_dashboard(tmp_path / "results") == r.dashboard        # newest run
+    (r.out_dir / "notes.txt").write_text("not an export")
     server, url = make_server(tmp_path / "results", port=18765)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         assert url.startswith("http://127.0.0.1:")
         with urllib.request.urlopen(url) as resp:
             assert resp.status == 200 and b"RISK DASHBOARD" in resp.read()
-        with pytest.raises(urllib.error.HTTPError):
-            urllib.request.urlopen(url + "raw-data.xlsx")
+        with urllib.request.urlopen(url + quote(r.report_pdf.name)) as resp:
+            assert resp.headers["Content-Type"] == "application/pdf"
+            assert resp.read(5) == b"%PDF-"
+        with urllib.request.urlopen(url + "raw-data.xlsx") as resp:
+            assert "attachment" in resp.headers["Content-Disposition"]
+        for other in ("notes.txt", "extracted", "../run1/raw-data.xlsx", "%2e%2e/x"):
+            with pytest.raises(urllib.error.HTTPError):
+                urllib.request.urlopen(url + other)
         second, url2 = make_server(r.out_dir, port=server.server_address[1])
         assert url2 != url                                   # port taken: the next one
         second.server_close()
@@ -425,3 +433,73 @@ def test_dashboard_checks_menu_lists_what_failed_and_where(tmp_path):
     assert by["Documents no parser recognised"]["items"] == ["random letter.pdf"]
     assert by["Company names not in the counterparty map"]["ok"] in (True, False)
     assert all(c["ok"] == (c["value"] == 0) for c in data["checks"])
+
+
+# --------------------------------------------------------------------------- risk report
+
+def test_daily_risk_report_xlsx_and_pdf(tmp_path):
+    from riskparse.riskreport import BRIDGE
+    from riskparse.tradesheet import monthly_month
+    monthly = tmp_path / "4. Trade Sheet"
+    monthly.mkdir()
+    nov = load_workbook(write_trade_sheet(tmp_path / "src") / "October Trading 2026.xlsx")
+    rows = [list(r) for r in nov["Nov CTS"].iter_rows(min_row=2, values_only=True)]
+    pricing = [["Trade Cycle:", datetime(2026, 11, 1), None, "WTI CMA:", 91.5],
+               ["NOS Date:", datetime(2026, 10, 15), None, "FX:", 1.39], [], [],
+               ["Grade", "Location", "COMM Price"], ["LSB", "Cromer, MB", -5.8],
+               ["Midale", "Cromer, MB", -9.2]]
+    curve = [["Date", "CommonGrade", "CommonLocation", "CommonPipeline", "Source", "Type",
+              "Contract", "Price", "Unit", "Base"]]
+    for i, (wti, lsb) in enumerate([(91.5, None), (88.0, -6.0), (85.0, -6.2)]):
+        month = datetime(2026, 11 + i, 1) if i < 2 else datetime(2027, 1, 1)
+        curve.append([datetime(2026, 10, 30), "WTI CMA", "Cushing, OK", None, "Calculated",
+                      "Crude", month, wti, "USD/bbl", "Base"])
+        curve.append([datetime(2026, 10, 30), "USD/CAD", "", None, "Refinitiv", "FX", month,
+                      1.39, "USD/CAD", "Base"])
+        if lsb is not None:
+            for src, delta in (("Modern", 0.1), ("Marex", -0.1)):
+                curve.append([datetime(2026, 10, 30), "LSB", "Cromer, MB", None, src, "Crude",
+                              month, lsb + delta, "USD/bbl", "WTI CMA"])
+    _wb(monthly / "November Trading 2026.xlsm",
+        {"Trading": rows, "Pricing V2": pricing, "Forward Curve": curve})
+    r = build_review(_zip(tmp_path), tmp_path / "out", trade_sheet=monthly)
+    assert r.report_xlsx.name.startswith("Risk Report - CTT Position Summary - ")
+    assert r.report_pdf.read_bytes()[:5] == b"%PDF-"
+    assert monthly_month(monthly / "November Trading 2026.xlsm").month == 11
+
+    wb = load_workbook(r.report_xlsx)
+    ws = wb["CTT Position Summary"]
+    cells = {c.value: c for row in ws.iter_rows() for c in row if isinstance(c.value, str)}
+    assert "KINGSTON MARKETING LIMITED | RISK REPORT" in cells
+    for label in BRIDGE:                             # scheduler inputs: yellow, left empty
+        c = cells[label]
+        inp = ws.cell(c.row, c.column + 1)
+        assert inp.value is None and inp.fill.fgColor.rgb.endswith("FFF2CC")
+    wti = next(c for v, c in cells.items() if v.startswith("WTICMA (Nov-26 to Dec-26)"))
+    assert ws.cell(wti.row, 3).value == pytest.approx(91.5 * 1.39, abs=1e-3)
+    assert ws.cell(wti.row, 4).value == pytest.approx(88.0 * 1.39, abs=1e-3)
+    assert ws.cell(wti.row, 6).value.startswith("=IF(")         # roll = formula
+    lsb = next(c for v, c in cells.items() if v.startswith("LSB COMM (Nov-26 to Dec-26)"))
+    assert ws.cell(lsb.row, 3).value == pytest.approx(-5.8 * 1.39, abs=1e-3)  # COMM index
+    assert ws.cell(lsb.row, 4).value == pytest.approx(-6.0 * 1.39, abs=1e-3)  # broker avg
+    book = cells["Stream Buy"]
+    assert ws.cell(book.row, 3 + 1).value == 2500                  # Midale buy 11001
+    assert ws.print_area and ws.page_setup.fitToWidth == 1
+
+    from pypdf import PdfReader
+    text = "".join(p.extract_text() for p in PdfReader(r.report_pdf).pages)
+    assert "CTT Position Summary" in text and "WTICMA" in text
+    assert "scheduler" in text.lower()
+    html, data = _dashboard_data(r.dashboard)
+    assert [e["label"] for e in data["exports"]][:2] == ["Daily risk report (PDF)",
+                                                        "Daily risk report (Excel)"]
+    assert 'id="exportbtn"' in html
+    assert "railbtn.className =" not in html       # would drop the floating-button style
+
+
+def test_risk_report_without_a_trade_sheet_still_writes(tmp_path):
+    r = build_review(_zip(tmp_path), tmp_path / "out")
+    assert r.report_pdf.is_file() and r.report_xlsx.is_file()
+    from pypdf import PdfReader
+    text = "".join(p.extract_text() for p in PdfReader(r.report_pdf).pages)
+    assert "No prices" in text

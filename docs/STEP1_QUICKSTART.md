@@ -94,8 +94,25 @@ cd C:\RiskCode\KM-RiskReporting
 - **text**: all readable text;
 - **issues**.
 
+**`Risk Report - CTT Position Summary - <date>.pdf`** and **`.xlsx`**: the daily risk report
+page, built from the trade sheet's Trading tab, the confirmations and bank swaps, the checks,
+and the prices in the trading workbook (Pricing V2: the trade cycle's COMM index, WTI CMA
+and FX; Forward Curve: WTI CMA, USD/CAD, broker differentials and Mont Belvieu butane by
+month). It shows the key figures, a commentary, the position bridge, the trade sheet book
+by stream and grade, the WTICMA + LSB index roll in CAD/bbl, the bank swaps, the market
+table and the checks.
+
+The **terminal figures** (opening inventory, receipts, butane injection, deliveries,
+gain/loss, inventory rolled, Westspur short) come from the scheduler's forecast, which is not
+a source yet. In the Excel report they are **yellow cells**: type them in and the formulas
+complete the net open position, the inventory hedged and the MTM roll exposure; then
+**File > Export > PDF** in Excel gives the complete page. The PDF written by the run shows
+those figures as "-". Mitsue and the C4 (butane) supply and hedge coverage are not in the
+current sources either; the report says so.
+
 **`dashboard.html`**: the run as a page to read, in the style of the risk report. On the
-left floats a round **checks** button: a green checkmark when every check is OK, a red flag with
+left float two round buttons. The **export** button (a download arrow) opens a menu with the
+daily risk report (PDF and Excel), raw-data.xlsx and review.xlsx. The **checks** button: a green checkmark when every check is OK, a red flag with
 the number of failing checks when not. Click it to slide out each check, what failed and a
 **Show me** link to the rows concerned. Then key figures, confirmed and trade sheet positions by delivery
 month and grade (m3 and bbl, with weighted differentials), the reconciliation (filter by

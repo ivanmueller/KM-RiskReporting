@@ -16,6 +16,8 @@ dependencies = [
     "pypdf>=6.0,<7",        # text-layer PDF extraction (BSD-3-Clause)
     "olefile>=0.46,<1",     # Outlook .msg container reader (BSD-2-Clause)
     "xlrd>=2.0,<3",         # legacy .xls reader (BSD-3-Clause)
+    "reportlab>=5.0,<6",    # daily risk report PDF (BSD); pulls pillow (MIT-CMU),
+                            # charset-normalizer (MIT)
 ]
 
 [project.optional-dependencies]

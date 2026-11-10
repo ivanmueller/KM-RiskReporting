@@ -37,7 +37,7 @@ ruff check src tests
 riskparse demo-smoke --workdir var/demo
 ```
 
-Windows/PowerShell equivalents are in `docs/DEVELOPER.md`. Expected result: `407 passed` (the
+Windows/PowerShell equivalents are in `docs/DEVELOPER.md`. Expected result: `410 passed` (the
 repository-hygiene tests skip outside a git checkout), and the demo ends with `SMOKE DEMO: PASS`.
 
 > **Step 1 entry point:** `riskparse review <zip or folder>` (Windows: `SETUP.bat`, `RUN.bat`; columns from `config/raw-data-format.xlsx`)
@@ -51,7 +51,9 @@ repository-hygiene tests skip outside a git checkout), and the demo ends with `S
 > `tradesheet.py`, `sheetcheck.py`: composite
 > match, apportioned volumes, missing confirmations, bank swaps as rolls or forward hedges)
 > and writes `dashboard.html`, served on 127.0.0.1 by `riskparse dashboard`
-> (`dashboard.py`). Tests use synthetic
+> (`dashboard.py`), and the daily risk report "CTT Position Summary" as Excel and PDF
+> (`riskreport.py`, prices from the trading workbook via `market.py`; the scheduler's
+> terminal figures are yellow input cells until that forecast becomes a source). Tests use synthetic
 > replicas (`tests/confirm_fixtures.py`); real confirmations stay out of the repository. The
 > registration, database and audit pieces below are groundwork for later stages.
 

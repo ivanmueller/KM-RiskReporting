@@ -18,6 +18,9 @@ against the master trade sheet, and trade sheet deals with no confirmation), **f
 
 ``dashboard.html``: the same results as a page to read (see :mod:`riskparse.dashboard`).
 
+``Risk Report - CTT Position Summary - <date>.xlsx`` and ``.pdf``: the daily risk report
+page (see :mod:`riskparse.riskreport`).
+
 Trades come only from the confirmation-family parsers (:mod:`riskparse.confirms`).
 A document no parser recognises is listed as ``UNRECOGNISED``; it is not guessed at.
 """
@@ -107,6 +110,8 @@ class ReviewResult:
     sheet_errors: dict[str, str] = field(default_factory=dict)      # label -> why not read
     financial: list = field(default_factory=list)        # FinancialRow per bank swap
     dashboard: Path | None = None
+    report_xlsx: Path | None = None                      # daily risk report (Excel)
+    report_pdf: Path | None = None                       # daily risk report (PDF)
     source: str = ""
     build: str = ""
 
@@ -145,7 +150,7 @@ def _put(ws, row: int, values: list) -> None:
 REVIEW_ROOT = "contracts-data"
 MONTHLY_LABEL = "monthly trade sheet"
 # Bump with every change to the output, so a printed summary shows which code produced it.
-REVIEW_BUILD = "2026-11-10c (monthly trade sheet, Trading tab; dashboard logo)"
+REVIEW_BUILD = "2026-11-10d (daily risk report xlsx + pdf, export button)"
 
 
 def default_out_dir(src: Path, now: datetime | None = None) -> Path:
@@ -256,8 +261,14 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
                              "sheets by design")
     _write_raw_data(result)
     _write_review(result, text_rows, src)
-    from riskparse.dashboard import write_dashboard
-    result.dashboard = write_dashboard(result, out)
+    from riskparse.dashboard import build_data, write_dashboard
+    from riskparse.riskreport import write_risk_report
+    data = build_data(result)
+    try:
+        result.report_xlsx, result.report_pdf = write_risk_report(result, data, out)
+    except Exception as exc:          # the report must never stop the run's other outputs
+        result.issues.append(("risk report", "RISK_REPORT_NOT_WRITTEN", str(exc)))
+    result.dashboard = write_dashboard(result, out, data)
     return result
 
 
