@@ -144,9 +144,8 @@ def _put(ws, row: int, values: list) -> None:
 
 REVIEW_ROOT = "contracts-data"
 MONTHLY_LABEL = "monthly trade sheet"
-LIBBY_LABEL = "Libby's trade sheet"
 # Bump with every change to the output, so a printed summary shows which code produced it.
-REVIEW_BUILD = "2026-11-10b (two trade sheets, dashboard logo)"
+REVIEW_BUILD = "2026-11-10c (monthly trade sheet, Trading tab; dashboard logo)"
 
 
 def default_out_dir(src: Path, now: datetime | None = None) -> Path:
@@ -161,16 +160,14 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
                  names_path: str | Path | None = None,
                  use_names: bool = True,
                  results_root: str | Path | None = None,
-                 trade_sheet: str | Path | None = None,
-                 libby_sheet: str | Path | None = None) -> ReviewResult:
+                 trade_sheet: str | Path | None = None) -> ReviewResult:
     """``format_path`` defaults to ``config/raw-data-format.xlsx`` and ``names_path`` to
     ``config/counterparty_map.csv``, looked for in the current folder, then the repository.
 
     ``results_root``: the folder that collects every run (a new dated folder is made in it
     each time); default ``contracts-data`` next to the source. ``out_dir`` overrides both.
     ``trade_sheet``: the monthly trade sheet folder (``<Month> Trading <Year>`` workbooks,
-    Trading tab), or one workbook. ``libby_sheet``: Libby's trade sheet (a workbook, or the
-    folder holding it). The confirmations are checked against each one given."""
+    Trading tab), or one workbook: the desk's record the confirmations are checked against."""
     src = Path(source)
     if not src.exists():
         raise ReviewError(f"{src} does not exist")
@@ -245,8 +242,7 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
     result.financial = classify_financial([t for t in result.trades if is_financial(t)])
     months = {month_of(t.start_date) for t in result.trades
               if t.start_date and not is_financial(t)}
-    for label, location, monthly in ((MONTHLY_LABEL, trade_sheet, True),
-                                     (LIBBY_LABEL, libby_sheet, False)):
+    for label, location, monthly in ((MONTHLY_LABEL, trade_sheet, True),):
         if location is None:
             continue
         try:
@@ -339,7 +335,7 @@ def _format_rows(result: ReviewResult):
 
 
 def _short(label: str) -> str:
-    return label.split()[0].capitalize()          # "Monthly", "Libby's"
+    return label.split()[0].capitalize()          # "Monthly"
 
 
 def _sheet_status(result: ReviewResult, t: Trade) -> str:

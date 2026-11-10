@@ -274,8 +274,7 @@ def cmd_review(args) -> int:
         return 4
     result = build_review(args.source, args.out, format_path=args.format, us=args.us or None,
                           names_path=args.names, use_names=not args.no_names,
-                          results_root=args.results, trade_sheet=args.trade_sheet,
-                          libby_sheet=args.libby_sheet)
+                          results_root=args.results, trade_sheet=args.trade_sheet)
     print(format_summary(result))
     print(f"\nraw-data (your format + checks): {result.raw_data}")
     print(f"review workbook (evidence, trade sheet, swaps): {result.workbook}")
@@ -382,9 +381,8 @@ def build_parser() -> argparse.ArgumentParser:
                                       "the source)")
     rv.add_argument("--trade-sheet", help="the monthly trade sheet folder: the '<Month> "
                                           "Trading <Year>' workbooks (Trading tab) for this "
-                                          "month and the confirmations' delivery months")
-    rv.add_argument("--libby-sheet", help="Libby's trade sheet: the workbook, or the folder "
-                                          "holding it (exactly one workbook)")
+                                          "month and the confirmations' delivery months, or "
+                                          "one workbook")
     rv.set_defaults(func=cmd_review)
 
     db = sub.add_parser("dashboard", help="show a run's dashboard at a local address until "

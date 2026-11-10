@@ -47,8 +47,8 @@ repository-hygiene tests skip outside a git checkout), and the demo ends with `S
 > daily summary, apply `UPDATED-` amendments and flag anything to check. Company names are
 > mapped to master names by `config/counterparty_map.csv` (`src/riskparse/names.py`;
 > maintained by Risk; unmapped spellings are kept as written and flagged). The run checks the
-> confirmations against the monthly trade sheet (`<Month> Trading <Year>`, Trading tab) and
-> Libby's trade sheet (`tradesheet.py`, `sheetcheck.py`: composite
+> confirmations against the monthly trade sheet (`<Month> Trading <Year>`, Trading tab;
+> `tradesheet.py`, `sheetcheck.py`: composite
 > match, apportioned volumes, missing confirmations, bank swaps as rolls or forward hedges)
 > and writes `dashboard.html`, served on 127.0.0.1 by `riskparse dashboard`
 > (`dashboard.py`). Tests use synthetic

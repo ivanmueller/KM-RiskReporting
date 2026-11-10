@@ -376,32 +376,34 @@ def test_only_the_trading_tab_and_not_the_what_if_block(tmp_path):
     assert sheet.trades[0].where == "October Trading 2026: Trading!row 2"
 
 
-def test_validated_against_both_trade_sheets(tmp_path):
+def test_validated_against_the_trading_tab_of_the_delivery_months_workbook(tmp_path):
     monthly = tmp_path / "4. Trade Sheet"
     monthly.mkdir()
-    # the October workbook holds October deliveries only: the November confirmations'
-    # month is not on it, which is not a break
-    _wb(monthly / "October Trading 2026.xlsm", {"Trading": [HEAD, _row(
-        11836, datetime(2026, 10, 2), "SYN Old Co", "Libby", "Sell", -2500, "LSB", "Can",
-        datetime(2026, 10, 1), "Fixed", -7, "Modern")]})
-    libby = write_trade_sheet(tmp_path / "Libby")
-    r = build_review(_zip(tmp_path), tmp_path / "out", trade_sheet=monthly, libby_sheet=libby)
-    assert [c.sheet.label for c in r.sheet_checks] == ["monthly trade sheet",
-                                                       "Libby's trade sheet"]
-    first, second = r.sheet_checks
-    assert {row.status for row in first.rows if row.trade} == {MONTH_NOT_COVERED}
-    assert first.sheet.missing == ["November Trading 2026"] or first.sheet.missing == []
-    assert second.for_trade(next(t for t in r.trades if t.contract_no == "90001")).status \
-        == MATCHED
+    oct_deal = _row(11836, datetime(2026, 10, 2), "SYN Old Co", "Libby", "Sell", -2500, "LSB",
+                    "Can", datetime(2026, 10, 1), "Fixed", -7, "Modern")
+    _wb(monthly / "October Trading 2026.xlsm", {"Trading": [HEAD, oct_deal]})
+    # only October in the folder: the November confirmations' month is not on it - no break
+    r = build_review(_zip(tmp_path), tmp_path / "out1", trade_sheet=monthly)
+    (check,) = r.sheet_checks
+    assert {row.status for row in check.rows if row.trade} == {MONTH_NOT_COVERED}
+    assert "November Trading 2026" in check.sheet.missing
+    assert not any("not on the monthly" in f for t in r.trades for f in t.flags)
+    assert "not in the folder yet: November Trading 2026" in format_summary(r)
+
+    # with the November workbook (its Trading tab), the November confirmations are checked
+    nov = load_workbook(write_trade_sheet(tmp_path / "src") / "October Trading 2026.xlsx")
+    rows = [list(r) for r in nov["Nov CTS"].iter_rows(min_row=2, values_only=True)]
+    _wb(monthly / "November Trading 2026.xlsx", {"Summary": [["totals"]], "Trading": rows})
+    r = build_review(_zip(tmp_path), tmp_path / "out2", trade_sheet=monthly)
+    (check,) = r.sheet_checks
+    assert any(p.name == "November Trading 2026.xlsx" for p in check.sheet.paths)
+    t90001 = next(t for t in r.trades if t.contract_no == "90001")
+    assert check.for_trade(t90001).status == MATCHED
+    assert check.for_trade(t90001).sheet.where == "November Trading 2026: Trading!row 2"
     wb = load_workbook(r.workbook)
-    assert {"monthly trade sheet", "Libby's trade sheet"} <= set(wb.sheetnames)
     checks = {row[0]: row for row in wb["checks"].iter_rows(min_row=2, values_only=True)}
-    assert checks["90001"][10].splitlines() == [
-        "Monthly: MONTH NOT ON THIS SHEET", "Libby's: MATCHED 11001 (Nov CTS!row 3)"]
-    flags = next(t for t in r.trades if t.contract_no == "82999001").flags
-    assert "not on Libby's trade sheet" in flags
-    assert not any("monthly" in f for f in flags)          # its month is not on that sheet
+    assert checks["90001"][10] == "Monthly: MATCHED 11001 (November Trading 2026: Trading!row 2)"
+    assert "not on the monthly trade sheet" in next(
+        t for t in r.trades if t.contract_no == "82999001").flags
     html, data = _dashboard_data(r.dashboard)
-    assert [s["named"] for s in data["sources"]] == ["the monthly trade sheet",
-                                                    "Libby's trade sheet"]
-    assert data["kpi"]["validated_all"] == 0
+    assert [s["named"] for s in data["sources"]] == ["the monthly trade sheet"]

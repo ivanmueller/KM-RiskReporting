@@ -21,7 +21,7 @@ Two kinds of source use this reader:
   The current month's workbook is used, plus the workbook of every delivery month the
   confirmations cover, when the folder has it. A folder with a single workbook of any name
   is used as it is.
-* any other trade sheet (Libby's): one workbook, every tab with the headers above.
+* a single workbook given directly: every tab with the headers above.
 
 A tab ends at a repeated header row: the "what if" block below the deals is not read.
 """
@@ -115,7 +115,7 @@ class TradeSheet:
 
     @property
     def named(self) -> str:
-        """For sentences: "the monthly trade sheet", "Libby's trade sheet"."""
+        """For sentences: "the monthly trade sheet" (a possessive label has no "the")."""
         return self.label if "'s " in self.label else f"the {self.label}"
 
     @property
@@ -169,8 +169,8 @@ def select_monthly(folder: str | Path, months=(), today: date | None = None
     missing = [monthly_name(m) for m in wanted if m not in named]
     if chosen:
         return chosen, missing
-    if len(files) == 1:
-        return files, []
+    if len(files) == 1:     # one workbook: use it, but say which month's is still missing
+        return files, missing if monthly_month(files[0]) else []
     found = ", ".join(f.name for f in files) or "no workbooks"
     raise TradeSheetError(f"{p} has no workbook named {' or '.join(missing)} (found: {found})")
 

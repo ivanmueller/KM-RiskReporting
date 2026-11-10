@@ -16,15 +16,14 @@ beforehand:
    `C:\RiskCode\KM-RiskReporting` or type another folder, then confirm with Y. Next time it
    suggests the folder you chose. The folder must be on this computer: a network drive
    (such as L:) is refused, because building the environment there is very slow or hangs.
-   It then asks for four locations, which can all be on the network (L:):
+   It then asks for three folders, which can all be on the network (L:):
    - **contracts**: where the confirmations are;
    - **results**: each run makes a new dated folder in it, for example
      `L:\...\Risk Directory\2. Raw Data`;
    - **monthly trade sheets**: the folder holding the `<Month> Trading <Year>` workbooks,
-     for example `L:\...\Risk Directory\4. Trade Sheet` (type `none` to skip);
-   - **Libby's trade sheet**: that workbook, or the folder holding only it (or `none`).
+     for example `L:\...\Risk Directory\4. Trade Sheet` (type `none` to skip the check).
 
-   It shows all four and asks Y to confirm. On later runs it shows them and asks Y to keep
+   It shows all three and asks Y to confirm. On later runs it shows them and asks Y to keep
    them or N to change them. Those are the last questions: the rest runs by itself;
 2. uses Git if installed, otherwise downloads a private copy for your user;
 3. downloads the latest version of the program;
@@ -86,8 +85,8 @@ cd C:\RiskCode\KM-RiskReporting
 **`review.xlsx`** holds the same two sheets, plus:
 - **evidence**: for every filled cell, the exact place in the document and the text it was read
   from;
-- **monthly trade sheet** and **Libby's trade sheet**: every confirmation against that
-  sheet, and every deal on it with no confirmation (see below);
+- **monthly trade sheet**: every confirmation against its Trading tab, and every deal on it
+  with no confirmation (see below);
 - **financial**: the bank swaps, each marked ROLL (with its partner) or FORWARD HEDGE;
 - **names**: every company spelling found, the master name it became, and `NOT IN MAP` for
   any spelling the counterparty map does not have yet;
@@ -101,22 +100,21 @@ month and grade (m3 and bbl, with weighted differentials), the reconciliation (f
 status), the bank swaps, counterparties and everything that needs attention. It needs no
 internet.
 
-## Checking against the trade sheets
+## Checking against the monthly trade sheet
 
-The confirmations are checked against **both** trade sheets, separately; each gets its own
-sheet in `review.xlsx`, its own line in the checks sheet's Trade sheet column
-(`Monthly: ...`, `Libby's: ...`) and its own tab in the dashboard. A deal on both is
-**validated on both** (a dashboard tile). The workbooks are only read, never changed.
+The confirmations are checked against the desk's **monthly trade sheet**, its **Trading**
+tab. The result is the `monthly trade sheet` sheet in `review.xlsx`, the Trade sheet column
+of the checks sheet (`Monthly: MATCHED 11836 (October Trading 2026: Trading!row 83)`) and
+the reconciliation in the dashboard. The workbooks are only read, never changed.
 
-**Monthly trade sheet.** Each `<Month> Trading <Year>` workbook (`October Trading 2026.xlsm`)
+Each `<Month> Trading <Year>` workbook (`October Trading 2026.xlsm`)
 holds one **delivery** month; only its **Trading** tab is read, down to the repeated header
 row (the "what if" block below is not read). RUN.bat reads the **current month's** workbook,
 and also the workbook of every delivery month in the confirmations when the folder has it
 (October trades for November barrels are in `November Trading 2026`). A month the folder does
 not have yet is listed as "not in the folder yet", and its confirmations are
-`MONTH NOT ON THIS SHEET`, not breaks.
-
-**Libby's trade sheet.** One workbook; every tab with the trade sheet headers is read.
+`MONTH NOT ON THIS SHEET`, not breaks. (A folder holding a single workbook with any other
+name is used as it is.)
 
 Columns are found by their header text (`Counter Party`, `Buy/Sale`, `Volume`, `Grade`,
 `Inj Month`, plus `Date`, `Diff'l`, `Broker / Direct`, `Internal Contract`, ...), in any

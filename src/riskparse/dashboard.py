@@ -59,7 +59,7 @@ def _m3(t) -> float | None:
 
 
 def _short(label: str) -> str:
-    return label.split()[0].capitalize()          # "Monthly", "Libby's"
+    return label.split()[0].capitalize()          # "Monthly"
 
 
 def _source(chk) -> dict:

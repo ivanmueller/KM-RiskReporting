@@ -103,20 +103,17 @@ rem The data folders (each may be on a network drive such as L:):
 rem   contracts   - the confirmations RUN.bat reads
 rem   results     - every run makes a new dated folder in it (raw-data.xlsx, review.xlsx,
 rem                 dashboard.html)
-rem   trade sheet - the monthly trade sheet folder ("<Month> Trading <Year>" workbooks), or none
-rem   Libby       - Libby's trade sheet: the workbook or its folder, or none
+rem   trade sheet - the monthly trade sheet folder ("<Month> Trading <Year>" workbooks,
+rem                 Trading tab), or none
 set "CONTRACTS="
 set "RESULTS="
 set "TRADESHEET="
-set "LIBBY="
 if exist "%TOOLS%\contracts-folder.txt" set /p CONTRACTS=<"%TOOLS%\contracts-folder.txt"
 if exist "%TOOLS%\results-folder.txt" set /p RESULTS=<"%TOOLS%\results-folder.txt"
 if exist "%TOOLS%\tradesheet-folder.txt" set /p TRADESHEET=<"%TOOLS%\tradesheet-folder.txt"
-if exist "%TOOLS%\libby-sheet.txt" set /p LIBBY=<"%TOOLS%\libby-sheet.txt"
 if not defined CONTRACTS goto :ask_contracts
 if not defined RESULTS goto :ask_contracts
 if not defined TRADESHEET goto :ask_contracts
-if not defined LIBBY goto :ask_contracts
 call :show_folders
 choice /c YN /n /m "      Keep these folders? Press Y to keep them or N to change them: "
 if errorlevel 2 goto :ask_contracts
@@ -126,7 +123,7 @@ goto :contracts_known
 set "DEFAULT_CONTRACTS=%APP%\contracts"
 if defined CONTRACTS set "DEFAULT_CONTRACTS=%CONTRACTS%"
 echo.
-echo       1 of 4 - Where are the contracts? RUN.bat reads every confirmation in it.
+echo       1 of 3 - Where are the contracts? RUN.bat reads every confirmation in it.
 echo       Press Enter for: %DEFAULT_CONTRACTS%
 echo       or type or paste another folder, for example L:\Risk\1. Contracts
 set "ANSWER=%DEFAULT_CONTRACTS%"
@@ -147,7 +144,7 @@ set "DEFAULT_RESULTS=%PARENT%\contracts-data"
 if exist "%PARENT%\2. Raw Data\" set "DEFAULT_RESULTS=%PARENT%\2. Raw Data"
 if defined RESULTS set "DEFAULT_RESULTS=%RESULTS%"
 echo.
-echo       2 of 4 - Where should the results go? Each run makes a new dated folder in it.
+echo       2 of 3 - Where should the results go? Each run makes a new dated folder in it.
 echo       Press Enter for: %DEFAULT_RESULTS%
 echo       or type or paste another folder, for example L:\Risk\2. Raw Data
 set "ANSWER=%DEFAULT_RESULTS%"
@@ -165,9 +162,9 @@ set "DEFAULT_TRADESHEET=none"
 if exist "%PARENT%\4. Trade Sheet\" set "DEFAULT_TRADESHEET=%PARENT%\4. Trade Sheet"
 if defined TRADESHEET set "DEFAULT_TRADESHEET=%TRADESHEET%"
 echo.
-echo       3 of 4 - Which folder holds the monthly trade sheets, named like
-echo       "November Trading 2026"? RUN.bat reads the Trading tab of this month's sheet
-echo       and of each delivery month in the confirmations, and checks against them.
+echo       3 of 3 - Which folder holds the monthly trade sheets, named like
+echo       "November Trading 2026"? RUN.bat checks the confirmations against their
+echo       Trading tab: this month's sheet and each delivery month's in the folder.
 echo       Press Enter for: %DEFAULT_TRADESHEET%
 echo       or type or paste a folder, for example L:\Risk\4. Trade Sheet,
 echo       or type none to skip the check.
@@ -178,34 +175,12 @@ if /i "%ANSWER%"=="none" goto :no_tradesheet
 if "%ANSWER%"=="" goto :no_tradesheet
 call :full_path
 set "TRADESHEET=%NORM%"
-if exist "%TRADESHEET%" goto :ask_libby
+if exist "%TRADESHEET%" goto :confirm_folders
 echo       That folder cannot be found - if it is on L:, check the network connection -
 echo       or type none.
 goto :ask_tradesheet
 :no_tradesheet
 set "TRADESHEET=none"
-
-:ask_libby
-set "DEFAULT_LIBBY=none"
-if defined LIBBY set "DEFAULT_LIBBY=%LIBBY%"
-echo.
-echo       4 of 4 - Where is Libby's trade sheet? Type or paste the workbook, or the
-echo       folder holding it - only that workbook. RUN.bat also checks against it.
-echo       Press Enter for: %DEFAULT_LIBBY%
-echo       or type none to skip it.
-set "ANSWER=%DEFAULT_LIBBY%"
-set /p "ANSWER=      Libby's trade sheet: "
-set "ANSWER=%ANSWER:"=%"
-if /i "%ANSWER%"=="none" goto :no_libby
-if "%ANSWER%"=="" goto :no_libby
-call :full_path
-set "LIBBY=%NORM%"
-if exist "%LIBBY%" goto :confirm_folders
-echo       That cannot be found - if it is on L:, check the network connection - or
-echo       type none.
-goto :ask_libby
-:no_libby
-set "LIBBY=none"
 
 :confirm_folders
 call :show_folders
@@ -214,7 +189,6 @@ if errorlevel 2 goto :ask_contracts
 > "%TOOLS%\contracts-folder.txt" echo %CONTRACTS%
 > "%TOOLS%\results-folder.txt" echo %RESULTS%
 > "%TOOLS%\tradesheet-folder.txt" echo %TRADESHEET%
-> "%TOOLS%\libby-sheet.txt" echo %LIBBY%
 :contracts_known
 echo.
 echo       That is all the questions. The rest runs by itself.
@@ -336,8 +310,7 @@ rem ======================================================================
 echo.
 echo       Contracts:             %CONTRACTS%
 echo       Results:               %RESULTS%
-echo       Monthly trade sheets:  %TRADESHEET%
-echo       Libby's trade sheet:   %LIBBY%
+echo       Trade sheets:          %TRADESHEET%
 exit /b 0
 
 :full_path
