@@ -95,7 +95,7 @@ cd C:\RiskCode\KM-RiskReporting
 - **issues**.
 
 **`dashboard.html`**: the run as a page to read, in the style of the risk report. On the
-left is a narrow **checks** menu: a green checkmark when every check is OK, a red flag with
+left floats a round **checks** button: a green checkmark when every check is OK, a red flag with
 the number of failing checks when not. Click it to slide out each check, what failed and a
 **Show me** link to the rows concerned. Then key figures, confirmed and trade sheet positions by delivery
 month and grade (m3 and bbl, with weighted differentials), the reconciliation (filter by

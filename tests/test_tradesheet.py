@@ -413,7 +413,8 @@ def test_dashboard_checks_menu_lists_what_failed_and_where(tmp_path):
     r = build_review(_zip(tmp_path), tmp_path / "out",
                      trade_sheet=write_trade_sheet(tmp_path / "ts"))
     html, data = _dashboard_data(r.dashboard)
-    assert 'id="rail"' in html and 'id="panel"' in html and 'id="checks"' not in html
+    assert 'id="railbtn"' in html and 'id="panel"' in html
+    assert 'id="rail"' not in html and 'id="checks"' not in html
     by = {c["check"]: c for c in data["checks"]}
     not_on = by["Physical confirmations not on the monthly trade sheet"]
     assert not not_on["ok"] and not_on["items"][0].startswith("82999001 - ")

@@ -2,9 +2,9 @@
 """The run's risk dashboard: one self-contained HTML page, and a temporary local server.
 
 ``write_dashboard`` turns a review result (parsed confirmations, the trade sheet check and
-the swaps) into ``dashboard.html`` in the run folder: a narrow checks menu on the left (a
-checkmark when every check is OK, a flag with a count when not; it slides out to list each
-check, what failed and a link to it), key figures, positions by delivery month and grade, the trade sheet reconciliation, the bank
+the swaps) into ``dashboard.html`` in the run folder: a floating checks button on the left
+(a checkmark when every check is OK, a flag with a count when not; it slides out a panel
+listing each check, what failed and a link to it), key figures, positions by delivery month and grade, the trade sheet reconciliation, the bank
 swaps and the counterparties. Everything is embedded in the page (no internet, no
 libraries), so it also opens straight from the folder.
 
@@ -347,24 +347,23 @@ gap:8px;margin:4px 0}.bar .lab{white-space:nowrap;overflow:hidden;text-overflow:
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}
 ul.att{margin:0;padding-left:18px}ul.att li{margin:2px 0}
 .note{color:var(--muted);font-size:12px}.empty{color:var(--muted);font-style:italic}
-body{padding-left:60px}
-#rail{position:fixed;left:0;top:0;bottom:0;width:60px;background:var(--head);z-index:30;
-display:flex;flex-direction:column;align-items:center;padding-top:14px;
-border-right:4px solid var(--accent)}
-#railbtn{position:relative;width:44px;height:44px;border-radius:10px;border:0;cursor:pointer;
-display:grid;place-items:center;background:rgba(255,255,255,.08);color:#fff}
-#railbtn:hover,#railbtn[aria-expanded="true"]{background:rgba(255,255,255,.18)}
-#railbtn.ok svg{color:#5cc28c}#railbtn.bad svg{color:#ff8a7a}
-#railbtn .badge{position:absolute;top:-5px;right:-5px;min-width:18px;height:18px;
-border-radius:9px;background:#d92d20;color:#fff;font-size:11px;font-weight:700;
-display:grid;place-items:center;padding:0 4px}
-#rail .lab{color:#fff;opacity:.75;font-size:11px;margin-top:6px;letter-spacing:.04em}
-#panel{position:fixed;left:60px;top:0;bottom:0;width:min(420px,calc(100vw - 60px));
-background:var(--panel);border-right:1px solid var(--line);z-index:25;overflow-y:auto;
+main{max-width:1460px;padding-left:84px}
+#railbtn{position:fixed;left:18px;top:50%;transform:translateY(-50%);z-index:30;width:52px;
+height:52px;border-radius:50%;border:1px solid var(--line);cursor:pointer;display:grid;
+place-items:center;background:var(--panel);box-shadow:0 4px 14px rgba(15,23,42,.22);
+transition:transform .15s ease,box-shadow .15s ease}
+#railbtn:hover{transform:translateY(-50%) scale(1.06);box-shadow:0 6px 18px rgba(15,23,42,.28)}
+#railbtn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#railbtn.ok{color:var(--ok)}#railbtn.bad{color:var(--bad)}
+#railbtn .badge{position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;
+border-radius:10px;background:#d92d20;color:#fff;font-size:11px;font-weight:700;
+display:grid;place-items:center;padding:0 5px;border:2px solid var(--panel)}
+#panel{position:fixed;left:0;top:0;bottom:0;width:min(420px,100vw);
+background:var(--panel);border-right:1px solid var(--line);z-index:40;overflow-y:auto;
 transform:translateX(-105%);transition:transform .25s ease;box-shadow:6px 0 24px rgba(0,0,0,.18);
 padding:18px 18px 40px;visibility:hidden}
 #panel.open{transform:none;visibility:visible}
-#scrim{position:fixed;inset:0;background:rgba(10,15,25,.35);z-index:20;opacity:0;
+#scrim{position:fixed;inset:0;background:rgba(10,15,25,.35);z-index:35;opacity:0;
 pointer-events:none;transition:opacity .25s}#scrim.open{opacity:1;pointer-events:auto}
 #panel h2{margin:0 0 2px;font-size:17px}#panel .close{float:right;border:0;background:none;
 font-size:22px;line-height:1;cursor:pointer;color:var(--muted)}
@@ -380,15 +379,12 @@ font-size:22px;line-height:1;cursor:pointer;color:var(--muted)}
 color:var(--ink);border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit;font-size:12px}
 section.flash{animation:flash 1.6s ease}
 @keyframes flash{0%,40%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:none}}
-@media (max-width:600px){body{padding-left:48px}#rail{width:48px}#panel{left:48px;
-width:calc(100vw - 48px)}#railbtn{width:38px;height:38px}#rail .lab{font-size:8.5px}}
+@media (max-width:700px){main{padding-left:16px}#railbtn{top:auto;bottom:18px;left:14px;
+transform:none;width:48px;height:48px}#railbtn:hover{transform:scale(1.06)}}
 </style>
 </head>
 <body>
-<nav id="rail" aria-label="Checks">
 <button id="railbtn" aria-expanded="false" aria-controls="panel" title="Checks"></button>
-<div class="lab">CHECKS</div>
-</nav>
 <div id="scrim"></div>
 <aside id="panel" aria-label="Checks" aria-hidden="true">
 <button class="close" id="panelclose" aria-label="Close">&times;</button>
@@ -459,7 +455,7 @@ const ICON_FLAG = '<svg class="ic" viewBox="0 0 24 24" fill="currentColor" aria-
 const failing = D.checks.filter(c => !c.ok);
 const railbtn = $('railbtn'), panel = $('panel'), scrim = $('scrim');
 railbtn.className = failing.length ? 'bad' : 'ok';
-railbtn.innerHTML = (failing.length ? ICON_FLAG : ICON_OK).replace('class="ic"', 'width="26" height="26"') +
+railbtn.innerHTML = (failing.length ? ICON_FLAG : ICON_OK).replace('class="ic"', 'width="24" height="24"') +
   (failing.length ? `<span class="badge">${failing.length}</span>` : '');
 railbtn.title = failing.length ? `${failing.length} check(s) need a look` : 'All checks OK';
 $('panelsub').textContent = failing.length ? `${failing.length} of ${D.checks.length} need a look. Each compares a count with its target of 0, like the checks block of the risk report.` : `All ${D.checks.length} checks OK.`;
