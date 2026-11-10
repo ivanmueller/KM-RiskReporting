@@ -2,8 +2,8 @@
 """The run's risk dashboard: one self-contained HTML page, and a temporary local server.
 
 ``write_dashboard`` turns a review result (parsed confirmations, the trade sheet check and
-the swaps) into ``dashboard.html`` in the run folder: floating buttons on the left for the
-checks (a checkmark when every check is OK, a flag with a count when not; it slides out a
+the swaps) into ``dashboard.html`` in the run folder: floating buttons on the left for how
+each trade is validated (an "i"), the checks (a checkmark when every check is OK, a flag with a count when not; it slides out a
 panel listing each check, what failed and a link to it) and for export (the daily risk
 report PDF and Excel, raw-data.xlsx, review.xlsx), key figures, positions by delivery month and grade, the trade sheet reconciliation, the bank
 swaps and the counterparties. Everything is embedded in the page (no internet, no
@@ -430,7 +430,7 @@ td.n,th.n{text-align:right}
 .ok{background:var(--okbg);color:var(--ok)}.bad{background:var(--badbg);color:var(--bad)}
 .warn{background:var(--warnbg);color:var(--warn)}
 .info{background:#e6effa;color:#24548f}
-.rulegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.rulegrid{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}
 .rule{border:1px solid var(--line);border-left:5px solid var(--ok);border-radius:10px;padding:12px}
 .rule.bad{border-left-color:var(--bad);background:transparent;color:var(--ink)}
 .rule.warn{border-left-color:#d4a017;background:transparent;color:var(--ink)}
@@ -463,8 +463,9 @@ background:var(--panel);box-shadow:0 4px 14px rgba(15,23,42,.22);
 transition:transform .15s ease,box-shadow .15s ease}
 .fab:hover{transform:scale(1.06);box-shadow:0 6px 18px rgba(15,23,42,.28)}
 .fab:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-#railbtn{top:calc(50% - 60px)}#exportbtn{top:calc(50% + 8px);color:var(--ink)}
-#exportmenu{position:fixed;left:82px;top:calc(50% - 4px);z-index:31;background:var(--panel);
+#infobtn{top:calc(50% - 94px);color:#24548f;font:700 22px/1 Georgia,"Times New Roman",serif}
+#railbtn{top:calc(50% - 26px)}#exportbtn{top:calc(50% + 42px);color:var(--ink)}
+#exportmenu{position:fixed;left:82px;top:calc(50% + 38px);z-index:31;background:var(--panel);
 border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(15,23,42,.22);
 padding:6px;min-width:290px;display:none}
 #exportmenu.open{display:block}
@@ -477,14 +478,15 @@ color:var(--ink);text-decoration:none}
 #railbtn .badge{position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;
 border-radius:10px;background:#d92d20;color:#fff;font-size:11px;font-weight:700;
 display:grid;place-items:center;padding:0 5px;border:2px solid var(--panel)}
-#panel{position:fixed;left:0;top:0;bottom:0;width:min(420px,100vw);
+#panel,#infopanel{position:fixed;left:0;top:0;bottom:0;width:min(420px,100vw);
 background:var(--panel);border-right:1px solid var(--line);z-index:40;overflow-y:auto;
 transform:translateX(-105%);transition:transform .25s ease;box-shadow:6px 0 24px rgba(0,0,0,.18);
 padding:18px 18px 40px;visibility:hidden}
-#panel.open{transform:none;visibility:visible}
+#panel.open,#infopanel.open{transform:none;visibility:visible}
 #scrim{position:fixed;inset:0;background:rgba(10,15,25,.35);z-index:35;opacity:0;
 pointer-events:none;transition:opacity .25s}#scrim.open{opacity:1;pointer-events:auto}
-#panel h2{margin:0 0 2px;font-size:17px}#panel .close{float:right;border:0;background:none;
+#panel h2,#infopanel h2{margin:0 0 2px;font-size:17px}
+#panel .close,#infopanel .close{float:right;border:0;background:none;
 font-size:22px;line-height:1;cursor:pointer;color:var(--muted)}
 .ck{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px}
 .ck.bad{border-color:var(--bad);background:transparent;color:var(--ink)}
@@ -499,15 +501,21 @@ color:var(--ink);border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit;
 section.flash{animation:flash 1.6s ease}
 @keyframes flash{0%,40%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:none}}
 @media (max-width:700px){main{padding-left:16px}.fab{left:14px;width:48px;height:48px}
-#railbtn{top:auto;bottom:76px}#exportbtn{top:auto;bottom:18px}
+#infobtn{top:auto;bottom:134px}#railbtn{top:auto;bottom:76px}#exportbtn{top:auto;bottom:18px}
 #exportmenu{left:72px;top:auto;bottom:18px}}
 </style>
 </head>
 <body>
+<button id="infobtn" class="fab" aria-expanded="false" aria-controls="infopanel" title="How each trade is validated" aria-label="How each trade is validated">i</button>
 <button id="railbtn" class="fab" aria-expanded="false" aria-controls="panel" title="Checks"></button>
 <button id="exportbtn" class="fab" aria-expanded="false" aria-controls="exportmenu" title="Export"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></button>
 <div id="exportmenu" role="menu" aria-label="Export"></div>
 <div id="scrim"></div>
+<aside id="infopanel" aria-label="How each trade is validated" aria-hidden="true">
+<button class="close" id="infoclose" aria-label="Close">&times;</button>
+<h2>How each trade is validated</h2><p class="sub">Three ways a trade is done, and what
+checks it. The counts are this run's.</p><div class="rulegrid" id="rulegrid"></div>
+</aside>
 <aside id="panel" aria-label="Checks" aria-hidden="true">
 <button class="close" id="panelclose" aria-label="Close">&times;</button>
 <h2>Checks</h2><p class="sub" id="panelsub"></p><div id="cklist"></div>
@@ -518,9 +526,6 @@ section.flash{animation:flash 1.6s ease}
 </header>
 <main>
 <div class="kpis" id="kpis"></div>
-<section id="rules"><h2>How each trade is validated</h2><p class="sub">Three ways a trade is
-done, and what checks it. The counts are this run's.</p><div class="rulegrid" id="rulegrid"></div>
-</section>
 <div class="grid2">
 <section><h2>Confirmed physical position by delivery month (m3)</h2>
 <p class="sub">From the confirmations: bought, sold and net per month and grade, with the
@@ -604,8 +609,17 @@ function openPanel(open) {
   panel.classList.toggle('open', open); scrim.classList.toggle('open', open);
   railbtn.setAttribute('aria-expanded', open); panel.setAttribute('aria-hidden', !open);
 }
-railbtn.onclick = () => openPanel(!panel.classList.contains('open'));
-scrim.onclick = $('panelclose').onclick = () => openPanel(false);
+const infobtn = $('infobtn'), infopanel = $('infopanel');
+function openInfo(open) {
+  if (open) openPanel(false);
+  infopanel.classList.toggle('open', open); scrim.classList.toggle('open', open);
+  infobtn.setAttribute('aria-expanded', open); infopanel.setAttribute('aria-hidden', !open);
+}
+railbtn.onclick = () => { openInfo(false); openPanel(!panel.classList.contains('open')); };
+infobtn.onclick = () => openInfo(!infopanel.classList.contains('open'));
+$('panelclose').onclick = () => openPanel(false);
+$('infoclose').onclick = () => openInfo(false);
+scrim.onclick = () => { openPanel(false); openInfo(false); };
 const exportbtn = $('exportbtn'), exportmenu = $('exportmenu');
 const FILE_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>';
 if ((D.exports || []).length) {
@@ -620,7 +634,7 @@ function openExport(open) {
 }
 exportbtn.onclick = e => { e.stopPropagation(); openExport(!exportmenu.classList.contains('open')); };
 document.addEventListener('click', e => { if (!e.target.closest('#exportmenu')) openExport(false); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { openPanel(false); openExport(false); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { openPanel(false); openInfo(false); openExport(false); } });
 $('cklist').onclick = e => {
   const b = e.target.closest('button.go'); if (!b) return;
   const j = D.checks[+b.dataset.k].jump;
@@ -735,7 +749,7 @@ function drawRules() {
 $('sochips').onclick = e => { const b = e.target.closest('button'); if (!b) return; soFilter = b.dataset.k; drawSheetOnly(); };
 drawSheetOnly();
 drawRules();
-$('rulegrid').onclick = e => { const b = e.target.closest('button[data-r]'); if (b) jumpTo(window.__ruleJumps[+b.dataset.r]); };
+$('rulegrid').onclick = e => { const b = e.target.closest('button[data-r]'); if (b) { openInfo(false); jumpTo(window.__ruleJumps[+b.dataset.r]); } };
 $('loctable').innerHTML = (D.locations || []).length ? '<tr><th>Location</th><th>Month</th><th class="n">Bought</th><th class="n">Sold</th><th class="n">Net m3</th><th class="n">Trades</th><th class="n">Confirmed</th></tr>' +
   D.locations.map(r => `<tr><td>${esc(r.location)}</td><td>${esc(r.month)}</td><td class="n">${num(r.bought)}</td><td class="n">${num(r.sold)}</td><td class="n"><b>${num(r.net)}</b></td><td class="n">${r.trades}</td><td class="n">${r.confirmed}</td></tr>`).join('')
   : '<tr><td class="empty">No physical trades.</td></tr>';

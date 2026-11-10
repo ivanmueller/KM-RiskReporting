@@ -141,7 +141,8 @@ If a trade sheet row changes, the changed trade is a new row awaiting confirmati
 row is marked "no longer" on the trade sheet; nothing is deleted. Close the register in Excel
 before RUN.bat so new trades can be added (it is still read while open).
 
-The dashboard's **How each trade is validated** panel shows the rules and this run's counts:
+The dashboard's round **i** button (above the checks flag) slides out **How each trade is
+validated**: the rules and this run's counts:
 broker trades (matched, differences, not on the trade sheet, missing broker confirms), direct
 trades (confirmed by a person, awaiting, disputed), bank swaps, and Evergreen / Term rows. Every trade
 in raw-data carries a **Source** (`Confirmation - Modern Commodities`, `Trade sheet - Direct

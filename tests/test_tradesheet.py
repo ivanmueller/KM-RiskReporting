@@ -607,6 +607,8 @@ def test_broker_rule_whole_month_blank_broker_and_term(tmp_path):
     by = {c["check"]: c for c in data["checks"]}
     assert by["Brokered deals in the period without a broker confirm"]["value"] == 2
     assert data["kpi"]["broker_missing"] == 2 and 'id="rulegrid"' in html
+    assert 'id="infobtn"' in html and 'id="infopanel"' in html      # behind the "i" button
+    assert 'id="rules"' not in html                                  # not on the page itself
 
 
 def _direct_sheet(folder, volume=-2500):
