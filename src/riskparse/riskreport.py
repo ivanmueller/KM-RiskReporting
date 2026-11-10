@@ -87,9 +87,12 @@ class ReportData:
                            "yet.")
         if k.get("sheet_direct") or k.get("sheet_evergreen"):
             parts.append(f"From the trade sheet with no contract: {k.get('sheet_direct', 0)} "
-                         f"direct (ICE) trades, taken as correct until a person confirms them "
-                         f"with the counterparty, and {k.get('sheet_evergreen', 0)} Evergreen "
-                         "rows.")
+                         f"direct (ICE) trades, taken as correct - {k.get('direct_confirmed', 0)}"
+                         f" confirmed with the counterparty by a person, "
+                         f"{k.get('direct_awaiting', 0)} awaiting, "
+                         f"{k.get('direct_disputed', 0)} disputed - and "
+                         f"{k.get('sheet_evergreen', 0)} Evergreen/Term rows. Brokered trades "
+                         f"missing a broker confirm: {k.get('broker_missing', 0)}.")
         if k.get("financial"):
             parts.append(f"Bank swaps: {k.get('rolls', 0)} roll(s) and {k.get('hedges', 0)} "
                          f"forward hedge(s), {k.get('swap_bbl', 0):,.0f} bbl.")

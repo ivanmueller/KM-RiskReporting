@@ -19,14 +19,16 @@ How the two sources relate (from the October data and the desk's explanation):
   from a producer and hedged with the bank).
 * A confirmation whose delivery month has no rows at all on a sheet (the monthly workbook
   for that month is not in the folder yet) is **month not on this sheet**, not a break.
-* **Evergreen** rows (``Evergreen`` in the Date column: rolling agreements) and **Direct**
+* **Evergreen** and **Term** rows (in the Date column: standing agreements) and **Direct**
   rows (``Direct`` in Broker / Direct: trades done on ICE, with no broker confirm) have no
   contract by nature. They are not breaks: they are brought into the system from the
   trade sheet (:func:`sheet_only_trades`), taken as correct, and the direct ones wait for
   a person to confirm them with the counterparty - the only independent check there is.
-* Brokered trade sheet deals dated inside the confirmations' date range but with no
-  confirmation are **missing broker confirms**; Term / Spot rows, internal rows (KM,
-  opening inventory) and deals outside that range are counted, not flagged.
+* Every brokered deal must match a broker confirm. A brokered trade sheet deal traded in a
+  calendar month the contracts folder covers (the months of the confirmations' trade
+  dates), with no confirm, is a **missing broker confirm** - also when Broker / Direct is
+  blank. Deals traded in other months have their confirms with those months' contracts;
+  undated Spot rows and internal rows (KM, opening inventory) are counted, not flagged.
 
 Nothing here changes either source.
 """
@@ -48,9 +50,9 @@ DIFFERENCES = "MATCHED - CHECK DIFFERENCES"
 NOT_ON_SHEET = "NOT ON TRADE SHEET"
 MONTH_NOT_COVERED = "MONTH NOT ON THIS SHEET"
 NO_CONFIRMATION = "NO CONFIRMATION"
-OUTSIDE_PERIOD = "OUTSIDE CONFIRMATION PERIOD"
+OUTSIDE_PERIOD = "OUTSIDE THE CONTRACTS' MONTHS"
 # trade sheet rows that have no contract by nature: brought into the system from the sheet
-EVERGREEN = "TRADE SHEET ONLY - EVERGREEN"
+EVERGREEN = "TRADE SHEET ONLY - EVERGREEN / TERM"
 DIRECT_ICE = "TRADE SHEET ONLY - DIRECT (ICE)"
 SHEET_ONLY = (EVERGREEN, DIRECT_ICE)
 STATUS_ORDER = (DIFFERENCES, NOT_ON_SHEET, NO_CONFIRMATION, MATCHED, DIRECT_ICE, EVERGREEN,
@@ -127,7 +129,9 @@ def is_financial(t: Trade) -> bool:
 
 
 def is_evergreen(s: SheetTrade) -> bool:
-    return s.trade_date is None and s.date_text.strip().lower().startswith("evergreen")
+    """A standing agreement: "Evergreen" (rolling) or "Term" in the Date column."""
+    return s.trade_date is None and s.date_text.strip().lower().startswith(("evergreen",
+                                                                           "term"))
 
 
 def is_direct(s: SheetTrade) -> bool:
@@ -297,7 +301,12 @@ def check_against_sheet(trades: list[Trade], sheet: TradeSheet,
     for s in sheet.trades:
         s.master_counterparty = resolve_counterparty(s, nmap, masters)
     dates = [t.trade_date for t in physical if t.trade_date]
-    result.period = (min(dates), max(dates)) if dates else None
+    # whole calendar months: the contracts folder holds a month's confirmations, so a
+    # brokered deal traded in such a month must have its broker confirm in it
+    if dates:
+        last = max(dates)
+        nxt = date(last.year + last.month // 12, last.month % 12 + 1, 1)
+        result.period = (min(dates).replace(day=1), date.fromordinal(nxt.toordinal() - 1))
 
     pairs = []
     for t in physical:
@@ -348,8 +357,8 @@ def check_against_sheet(trades: list[Trade], sheet: TradeSheet,
             continue
         if is_evergreen(s):
             result.rows.append(CheckRow(EVERGREEN, None, s, notes=[
-                "rolling Evergreen agreement: no contract in the contracts folder; taken "
-                "from the trade sheet"]))
+                f"standing {s.date_text.strip() or 'Evergreen'} agreement: no contract in the "
+                "contracts folder; taken from the trade sheet"]))
             continue
         if is_direct(s):
             result.rows.append(CheckRow(DIRECT_ICE, None, s, notes=[
@@ -363,7 +372,18 @@ def check_against_sheet(trades: list[Trade], sheet: TradeSheet,
             result.standing_rows += 1
             continue
         inside = result.period and result.period[0] <= s.trade_date <= result.period[1]
-        result.rows.append(CheckRow(NO_CONFIRMATION if inside else OUTSIDE_PERIOD, None, s))
+        if not inside:
+            result.rows.append(CheckRow(OUTSIDE_PERIOD, None, s, notes=[
+                f"traded {s.trade_date:%b %Y}: its broker confirm belongs with that month's "
+                "contracts, not this folder's"]))
+        elif not s.broker.strip():
+            result.rows.append(CheckRow(NO_CONFIRMATION, None, s, notes=[
+                "Broker / Direct is blank on the trade sheet: if it was a direct ICE trade, "
+                "mark it Direct; otherwise its broker confirm is missing"]))
+        else:
+            result.rows.append(CheckRow(NO_CONFIRMATION, None, s, notes=[
+                f"brokered through {s.broker}: every brokered trade needs a broker confirm, "
+                "and none matches this row"]))
 
     # a matched confirmation takes the trade sheet's Location (column N)
     for r in matched:
@@ -416,8 +436,12 @@ def sheet_only_trades(check: SheetCheck, nmap: NameMap | None,
         if r.status not in SHEET_ONLY:
             continue
         s = r.sheet
-        family = ("Trade sheet - Evergreen" if r.status == EVERGREEN
-                  else "Trade sheet - Direct (ICE)")
+        if r.status == DIRECT_ICE:
+            family = "Trade sheet - Direct (ICE)"
+        elif s.date_text.strip().lower().startswith("term"):
+            family = "Trade sheet - Term"
+        else:
+            family = "Trade sheet - Evergreen"
         t = Trade(family=family, source_doc="trade sheet", source_file=s.book or "trade sheet",
                   contract_no=s.internal_contract)
         name = s.counterparty

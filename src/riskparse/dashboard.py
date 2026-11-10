@@ -25,6 +25,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from riskparse.confirmlog import AWAITING, CONFIRMED, DISPUTED
 from riskparse.sheetcheck import (
     DIFFERENCES,
     DIRECT_ICE,
@@ -210,19 +211,20 @@ def build_data(result) -> dict:
           "Check what these swaps hedge.", {"section": "finsec"})
     sheet_trades = list(getattr(result, "sheet_trades", []) or [])
     sheet_only = []
+    confirmations = dict(getattr(result, "direct_confirmations", {}) or {})
     for t in sheet_trades:
-        evergreen = "Evergreen" in t.family
+        kind = t.family.removeprefix("Trade sheet - ")          # Direct (ICE) / Evergreen / Term
         diff = "" if t.fixed_differential is None else f"{_f(t.fixed_differential):g}"
         if t.secondary_index:                                   # index-priced (COMM)
             basis = f"{t.secondary_index} {diff}".strip()
         else:
             basis = f"Fixed {diff}" if diff else ""
-        if t.trade_date:
-            when = _f(t.trade_date)
-        else:
-            when = "Evergreen" if evergreen else ""
+        when = _f(t.trade_date) if t.trade_date else ("" if kind.startswith("Direct") else kind)
+        c = confirmations.get(id(t))
+        human = ("" if not kind.startswith("Direct") else
+                 c.status if c is not None else "NOT RECORDED")
         sheet_only.append({
-            "type": "Evergreen" if evergreen else "Direct (ICE)",
+            "type": kind, "human": human, "human_text": c.text() if c is not None else "",
             "contract": t.contract_no, "trade_date": when,
             "counterparty": t.counterparty or "(no counterparty)", "trader": t.trader,
             "side": t.side, "quantity": _f(t.quantity), "grade": t.grade,
@@ -230,6 +232,22 @@ def build_data(result) -> dict:
             "basis": basis, "currency": t.currency,
             "stream": t.evidence.get("stream", "").rsplit(": ", 1)[-1],
             "where": t.documents[0] if t.documents else ""})
+    direct_rows = [r for r in sheet_only if r["human"]]
+    check("Direct (ICE) trades the counterparty does not agree with",
+          [f"{r['contract'] or '-'} - {r['counterparty']} {r['side']} {r['grade']} "
+           f"{r['month']}: {r['human_text']}" for r in direct_rows if r["human"] == DISPUTED],
+          "A person recorded N: the counterparty does not agree with the trade sheet. Correct "
+          "the trade sheet or resolve it with the counterparty.",
+          {"section": "sheetonly", "filter": DISPUTED})
+    check("Direct (ICE) trades not yet confirmed by a person",
+          [f"{r['contract'] or '-'} - {r['counterparty']} {r['side']} {r['grade']} "
+           f"{r['month']} ({r['trade_date'] or 'no date'})"
+           for r in direct_rows if r["human"] in (AWAITING, "NOT RECORDED")],
+          "No broker confirm exists for a direct trade: the trade sheet is taken as correct, "
+          "and the only independent check is a person confirming it with the counterparty. "
+          "Record it in 'Direct trade confirmations.xlsx' in the results folder (Y, who, "
+          "when); the next run reads it.",
+          {"section": "sheetonly", "filter": "AWAITING"})
     sheet_ids = {id(t) for t in sheet_trades}
     loc = defaultdict(lambda: {"bought": 0.0, "sold": 0.0, "trades": 0, "confirmed": 0})
     for t in physical + sheet_trades:
@@ -254,8 +272,14 @@ def build_data(result) -> dict:
                 "swap_bbl": sum(float(f.trade.quantity or 0) for f in financial),
                 "rolls": sum(1 for f in financial if f.kind == "ROLL") // 2,
                 "hedges": sum(1 for f in financial if f.kind == "FORWARD HEDGE"),
-                "sheet_evergreen": sum(1 for r in sheet_only if r["type"] == "Evergreen"),
-                "sheet_direct": sum(1 for r in sheet_only if r["type"] != "Evergreen")},
+                "sheet_evergreen": sum(1 for r in sheet_only if not r["human"]),
+                "sheet_direct": sum(1 for r in sheet_only if r["human"]),
+                "direct_confirmed": sum(1 for r in sheet_only if r["human"] == CONFIRMED),
+                "direct_disputed": sum(1 for r in sheet_only if r["human"] == DISPUTED),
+                "direct_awaiting": sum(1 for r in sheet_only
+                                       if r["human"] in (AWAITING, "NOT RECORDED")),
+                "broker_missing": sum(s["kpi"]["missing"] for s in sources)},
+        "confirm_log": str(getattr(result, "confirm_log", "") or ""),
         "sheet_only": sheet_only, "locations": locations,
         "checks": checks, "financial": fin_rows, "conf_position": conf_position,
         "counterparties": counterparties,
@@ -406,6 +430,14 @@ td.n,th.n{text-align:right}
 .ok{background:var(--okbg);color:var(--ok)}.bad{background:var(--badbg);color:var(--bad)}
 .warn{background:var(--warnbg);color:var(--warn)}
 .info{background:#e6effa;color:#24548f}
+.rulegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.rule{border:1px solid var(--line);border-left:5px solid var(--ok);border-radius:10px;padding:12px}
+.rule.bad{border-left-color:var(--bad);background:transparent;color:var(--ink)}
+.rule.warn{border-left-color:#d4a017;background:transparent;color:var(--ink)}
+.rule h3{margin:0 0 4px;font-size:14px}.rule p{margin:0 0 8px;color:var(--muted);font-size:12.5px}
+.rule ul{margin:0;padding-left:16px;font-size:13px}.rule li{margin:2px 0}
+.rule button{margin-top:8px;border:1px solid var(--line);background:var(--chip);color:var(--ink);
+border-radius:8px;padding:3px 10px;cursor:pointer;font:inherit;font-size:12px}
 @media (prefers-color-scheme:dark){.info{background:#16263b;color:#8fb8ea}}.mute{background:var(--chip);color:var(--muted)}
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
 .chips button,.tabs button{border:1px solid var(--line);background:var(--chip);color:var(--ink);
@@ -486,6 +518,9 @@ section.flash{animation:flash 1.6s ease}
 </header>
 <main>
 <div class="kpis" id="kpis"></div>
+<section id="rules"><h2>How each trade is validated</h2><p class="sub">Three ways a trade is
+done, and what checks it. The counts are this run's.</p><div class="rulegrid" id="rulegrid"></div>
+</section>
 <div class="grid2">
 <section><h2>Confirmed physical position by delivery month (m3)</h2>
 <p class="sub">From the confirmations: bought, sold and net per month and grade, with the
@@ -501,8 +536,9 @@ volume-weighted differential (USD/bbl).</p><div id="confbars"></div>
 <section id="sheetonly"><h2>Trade sheet only (no contract)</h2><p class="sub">Rows of the
 trade sheet that have no contract by nature, brought into raw-data from the trade sheet.
 <b>Direct (ICE)</b> trades have no broker confirm: the trade sheet is taken as correct, and the
-only independent check is a person confirming them with the counterparty (mark the Risk check
-column of the checks sheet). <b>Evergreen</b> rows are rolling agreements.</p>
+only independent check is a person confirming them with the counterparty, recorded in
+<b>Direct trade confirmations.xlsx</b> in the results folder (Y, who, when; N if the
+counterparty does not agree). <b>Evergreen</b> and <b>Term</b> rows are standing agreements.</p>
 <div class="chips" id="sochips"></div><div class="scroll"><table id="sotable"></table></div></section>
 <section id="finsec"><h2>Financial swaps (bank)</h2><p class="sub">Not on the trade sheets by design. A
 roll is two swaps (four legs) moving exposure from one month to the next; a forward hedge
@@ -542,7 +578,7 @@ D.sources.forEach(s => {
   kp.push([`On ${s.named}`, `${pct}%`, `${k.matched} of ${base} physical; ${k.differences} differ, ${k.not_on_sheet} missing from it, ${k.missing} of its deals unconfirmed` + (k.month_not_covered ? `; ${k.month_not_covered} for months it does not hold` : '')]);
 });
 if (D.sources.length > 1) kp.push(['Validated on both', K.validated_all, `of ${K.physical} physical confirmations`]);
-if (K.sheet_direct + K.sheet_evergreen) kp.push(['Trade sheet only', K.sheet_direct + K.sheet_evergreen, `no contract: ${K.sheet_direct} direct (ICE) - a person confirms them; ${K.sheet_evergreen} Evergreen`]);
+if (K.sheet_direct) kp.push(['Direct (ICE) confirmed by a person', `${K.direct_confirmed} of ${K.sheet_direct}`, `${K.direct_awaiting} awaiting, ${K.direct_disputed} disputed - the trade sheet is their only record`]);
 kp.push(['Bank swaps', num(K.swap_bbl), `bbl; ${K.rolls} roll(s), ${K.hedges} forward hedge(s)`]);
 const vol = {}; D.conf_position.forEach(p => vol[p.month] = (vol[p.month] || 0) + p.bought + p.sold);
 const main = Object.keys(vol).sort((a, b) => vol[b] - vol[a])[0] || '';
@@ -589,6 +625,10 @@ $('cklist').onclick = e => {
   const b = e.target.closest('button.go'); if (!b) return;
   const j = D.checks[+b.dataset.k].jump;
   openPanel(false);
+  jumpTo(j);
+};
+function jumpTo(j) {
+  if (j.section === 'sheetonly') { soFilter = j.filter || 'ALL'; drawSheetOnly(); }
   if (j.section === 'reconsec' && D.sources.length) {
     src = j.source; filter = j.filter;
     [...$('srctabs').children].forEach((x, i) => x.classList.toggle('on', i === src));
@@ -656,18 +696,46 @@ $('fin').innerHTML = D.financial.length ? '<tr><th>Contract #</th><th>Type</th><
   : '<tr><td class="empty">No bank swaps in this run.</td></tr>';
 
 let soFilter = 'ALL';
+const soMatch = (r, f) => f === 'ALL' || (f === 'AWAITING' ? ['AWAITING CONFIRMATION', 'NOT RECORDED'].includes(r.human) : f === 'COUNTERPARTY DISAGREES' ? r.human === f : r.type === f);
+const humanPill = h => !h ? '' : `<span class="pill ${h === 'CONFIRMED' ? 'ok' : h === 'COUNTERPARTY DISAGREES' ? 'bad' : 'warn'}">${esc(h === 'AWAITING CONFIRMATION' ? 'AWAITING' : h)}</span>`;
 function drawSheetOnly() {
   const all = D.sheet_only || [];
   if (!all.length) { $('sheetonly').remove(); return; }
-  const n = t => all.filter(r => r.type === t).length;
-  $('sochips').innerHTML = [['ALL', `All (${all.length})`], ['Direct (ICE)', `Direct (ICE) (${n('Direct (ICE)')})`], ['Evergreen', `Evergreen (${n('Evergreen')})`]]
-    .map(([k, l]) => `<button data-k="${esc(k)}" class="${k === soFilter ? 'on' : ''}">${esc(l)}</button>`).join('');
-  const rows = all.filter(r => soFilter === 'ALL' || r.type === soFilter);
-  $('sotable').innerHTML = '<tr><th>Type</th><th>Contract #</th><th>Trade date</th><th>Counterparty</th><th>Trader</th><th>Side</th><th class="n">Volume m3</th><th>Grade</th><th>Location</th><th>Month</th><th>Price</th><th>Currency</th><th>Stream</th><th>Trade sheet row</th></tr>' +
-    rows.map(r => `<tr><td><span class="pill ${r.type === 'Evergreen' ? 'mute' : 'info'}">${esc(r.type)}</span></td><td>${esc(r.contract)}</td><td>${esc(r.trade_date)}</td><td>${esc(r.counterparty)}</td><td>${esc(r.trader)}</td><td>${esc(r.side)}</td><td class="n">${num(r.quantity, 0, 2)}</td><td>${esc(r.grade)}</td><td>${esc(r.location)}</td><td>${esc(r.month)}</td><td>${esc(r.basis)}</td><td>${esc(r.currency)}</td><td>${esc(r.stream)}</td><td class="note">${esc(r.where)}</td></tr>`).join('');
+  const types = [...new Set(all.map(r => r.type))];
+  const chips = [['ALL', 'All'], ...types.map(t => [t, t]), ['AWAITING', 'Direct awaiting a person'], ['COUNTERPARTY DISAGREES', 'Direct disputed']]
+    .map(([k, l]) => [k, l, all.filter(r => soMatch(r, k)).length]).filter(([k, , n]) => n || k === 'ALL');
+  $('sochips').innerHTML = chips.map(([k, l, n]) => `<button data-k="${esc(k)}" class="${k === soFilter ? 'on' : ''}">${esc(l)} (${n})</button>`).join('');
+  const rows = all.filter(r => soMatch(r, soFilter));
+  $('sotable').innerHTML = '<tr><th>Type</th><th>Human confirmation</th><th>Contract #</th><th>Trade date</th><th>Counterparty</th><th>Trader</th><th>Side</th><th class="n">Volume m3</th><th>Grade</th><th>Location</th><th>Month</th><th>Price</th><th>Currency</th><th>Stream</th><th>Trade sheet row</th></tr>' +
+    (rows.length ? rows.map(r => `<tr><td><span class="pill ${r.human ? 'info' : 'mute'}">${esc(r.type)}</span></td><td>${humanPill(r.human)}${r.human_text && r.human !== 'AWAITING CONFIRMATION' ? `<div class="note">${esc(r.human_text)}</div>` : ''}</td><td>${esc(r.contract)}</td><td>${esc(r.trade_date)}</td><td>${esc(r.counterparty)}</td><td>${esc(r.trader)}</td><td>${esc(r.side)}</td><td class="n">${num(r.quantity, 0, 2)}</td><td>${esc(r.grade)}</td><td>${esc(r.location)}</td><td>${esc(r.month)}</td><td>${esc(r.basis)}</td><td>${esc(r.currency)}</td><td>${esc(r.stream)}</td><td class="note">${esc(r.where)}</td></tr>`).join('')
+     : '<tr><td colspan="15" class="empty">Nothing in this group.</td></tr>');
+}
+function drawRules() {
+  const S0 = (D.sources || [])[0], k = S0 ? S0.kpi : null, cards = [];
+  const brokerIssues = k ? k.differences + k.not_on_sheet + k.missing : 0;
+  cards.push({cls: !k ? 'warn' : brokerIssues ? 'bad' : '', title: 'Through a broker (Modern, CalRock, One Exchange, Marex)',
+    rule: 'Everything must match: the broker confirm and the trade sheet row. If a brokered trade has no broker confirm, the confirm is missing.',
+    items: k ? [`${k.matched} confirmations matched to the trade sheet (${k.differences} with a difference)`, `${k.not_on_sheet} confirmations not on the trade sheet`, `${k.missing} brokered trade sheet deals missing a broker confirm`] : ['No trade sheet compared: nothing could be matched'],
+    jump: k && brokerIssues ? {section: 'reconsec', source: 0, filter: k.missing ? 'MISSING' : k.not_on_sheet ? 'NOT ON TRADE SHEET' : 'MATCHED - CHECK DIFFERENCES'} : null});
+  if (k && k.month_not_covered) cards[0].items.push(`${k.month_not_covered} confirmations for months whose trade sheet is not in the folder yet`);
+  if (K.sheet_direct || S0) cards.push({cls: K.direct_disputed ? 'bad' : K.direct_awaiting ? 'warn' : '', title: 'Direct on ICE',
+    rule: 'No broker confirm exists: the trade sheet is taken as correct. The only independent check is a person confirming each trade with the counterparty.',
+    items: [`${K.sheet_direct} direct trades, from the trade sheet`, `${K.direct_confirmed} confirmed by a person`, `${K.direct_awaiting} awaiting a person`, `${K.direct_disputed} the counterparty disagrees with`],
+    note: D.confirm_log ? `Record confirmations in ${D.confirm_log}` : '',
+    jump: K.direct_awaiting || K.direct_disputed ? {section: 'sheetonly', filter: K.direct_disputed ? 'COUNTERPARTY DISAGREES' : 'AWAITING'} : null});
+  cards.push({cls: D.financial.some(f => f.kind === 'SWAP') ? 'bad' : '', title: 'Through a bank (swaps)',
+    rule: 'The bank confirm (ISDA) is the record; swaps are not on the trade sheet by design.',
+    items: [`${K.financial} bank swaps: ${K.rolls} roll(s), ${K.hedges} forward hedge(s)`], jump: null});
+  if (K.sheet_evergreen) cards.push({cls: '', title: 'Evergreen and Term agreements',
+    rule: 'Standing agreements with no contract in the contracts folder: taken from the trade sheet.',
+    items: [`${K.sheet_evergreen} rows from the trade sheet`], jump: null});
+  window.__ruleJumps = cards.map(c => c.jump);
+  $('rulegrid').innerHTML = cards.map((c, i) => `<div class="rule ${c.cls}"><h3>${esc(c.title)}</h3><p>${esc(c.rule)}</p><ul>${c.items.map(x => `<li>${esc(x)}</li>`).join('')}</ul>${c.note ? `<p class="note" style="margin-top:6px">${esc(c.note)}</p>` : ''}${c.jump ? `<button data-r="${i}">Show me &rarr;</button>` : ''}</div>`).join('');
 }
 $('sochips').onclick = e => { const b = e.target.closest('button'); if (!b) return; soFilter = b.dataset.k; drawSheetOnly(); };
 drawSheetOnly();
+drawRules();
+$('rulegrid').onclick = e => { const b = e.target.closest('button[data-r]'); if (b) jumpTo(window.__ruleJumps[+b.dataset.r]); };
 $('loctable').innerHTML = (D.locations || []).length ? '<tr><th>Location</th><th>Month</th><th class="n">Bought</th><th class="n">Sold</th><th class="n">Net m3</th><th class="n">Trades</th><th class="n">Confirmed</th></tr>' +
   D.locations.map(r => `<tr><td>${esc(r.location)}</td><td>${esc(r.month)}</td><td class="n">${num(r.bought)}</td><td class="n">${num(r.sold)}</td><td class="n"><b>${num(r.net)}</b></td><td class="n">${r.trades}</td><td class="n">${r.confirmed}</td></tr>`).join('')
   : '<tr><td class="empty">No physical trades.</td></tr>';

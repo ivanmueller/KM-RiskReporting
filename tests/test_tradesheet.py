@@ -158,7 +158,7 @@ def test_review_checks_confirmations_against_the_trade_sheet(tmp_path):
     assert sheet_only == {"11005": NO_CONFIRMATION, "11006": DIRECT_ICE, "D": DIRECT_ICE,
                           "": EVERGREEN, "10950": OUTSIDE_PERIOD}
     assert (c.standing_rows, c.internal_rows) == (0, 0)
-    assert c.period == (date(2026, 10, 2), date(2026, 10, 5))
+    assert c.period == (date(2026, 10, 1), date(2026, 10, 31))     # whole months
     assert [(f.trade.contract_no, f.kind) for f in r.financial] == [("181000001", FORWARD_HEDGE)]
 
     wb = load_workbook(r.workbook)
@@ -173,7 +173,7 @@ def test_review_checks_confirmations_against_the_trade_sheet(tmp_path):
     assert "physical confirmations matched           4 (2 with differences)" in text
     assert "confirmations not on it                   1" in text
     assert "brokered deals with no broker confirm     1" in text
-    assert "trade sheet only, added to raw-data       1 Evergreen, 2 Direct (ICE)" in text
+    assert "trade sheet only, added to raw-data       1 Evergreen/Term, 2 Direct (ICE)" in text
     assert "SYN" not in text and "-6.2" not in text            # still counts only
 
 
@@ -331,7 +331,8 @@ def test_cli_results_folder_trade_sheet_and_dashboard(tmp_path, capsys):
     ts = write_trade_sheet(tmp_path / "4. Trade Sheet")
     assert main(["review", str(z), "--results", str(results), "--trade-sheet", str(ts)]) == 0
     out = capsys.readouterr().out
-    runs = list(results.iterdir())
+    runs = [p for p in results.iterdir() if p.is_dir()]
+    assert (results / "Direct trade confirmations.xlsx").is_file()      # the register
     assert len(runs) == 1 and (runs[0] / "raw-data.xlsx").is_file()
     assert "Monthly trade sheet: October Trading 2026.xlsx" in out and "dashboard:" in out
     assert main(["dashboard", str(tmp_path / "nothing-here")]) == 4
@@ -540,7 +541,7 @@ def test_evergreen_and_direct_rows_come_into_raw_data_with_their_location(tmp_pa
     assert by_no["90001"]["Source"] == "Confirmation - Modern Commodities"
     checks = {row[0]: row for row in wb["checks"].iter_rows(min_row=2, values_only=True)}
     assert checks["11006"][10].startswith("TRADE SHEET ONLY - Direct (ICE)")
-    assert "confirm it with the counterparty" in checks["11006"][10]
+    assert checks["11006"][10].endswith("Human confirmation: AWAITING CONFIRMATION")
     assert not any("not on the monthly" in f for t in r.sheet_trades for f in t.flags)
 
     html, data = _dashboard_data(r.dashboard)
@@ -567,3 +568,101 @@ def test_unmatched_confirmation_locations_become_place_names():
     t.location, t.evidence["location"] = "Cromer, MB (Enbridge)", "p1: Cromer, MB (Enbridge)"
     tag_locations([t])
     assert t.location == "Cromer" and "Cromer, MB (Enbridge)" in t.evidence["location"]
+
+
+# --------------------------------------------------------------------------- validation rules
+
+def _rules_sheet(folder, extra_rows):
+    folder.mkdir(parents=True, exist_ok=True)
+    rows = [HEAD] + extra_rows
+    _wb(folder / "October Trading 2026.xlsm", {"Trading": rows})
+    return folder
+
+
+def test_broker_rule_whole_month_blank_broker_and_term(tmp_path):
+    from riskparse.sheetcheck import EVERGREEN, NO_CONFIRMATION, OUTSIDE_PERIOD
+    nov = datetime(2026, 11, 1)
+    ts = _rules_sheet(tmp_path / "ts", [
+        # brokered, traded Oct 20: after the last confirmation (Oct 5) but in the same month
+        _row(12001, datetime(2026, 10, 20), "SYN Late", "Libby", "Sell", -2500, "LSB", "USD",
+             nov, "Fixed", -5, "Modern"),
+        # dated, Broker / Direct blank
+        _row(12002, datetime(2026, 10, 21), "SYN Blank", "Libby", "Sell", -2500, "LSB", "USD",
+             nov, "Fixed", -5, None),
+        # traded in September: its confirm belongs with September's contracts
+        _row(12003, datetime(2026, 9, 20), "SYN Sept", "Libby", "Sell", -2500, "LSB", "USD",
+             nov, "Fixed", -5, "Marex"),
+        # a Term agreement: brought in like Evergreen
+        _row(11120, "Term", "SYN C5 Co", "Libby", "Buy", 3534, "C5", "USD", nov, "Fixed",
+             -0.9, None, "C5")])
+    r = build_review(_zip(tmp_path), tmp_path / "out", trade_sheet=ts)
+    rows = {row.sheet.internal_contract: row for row in r.sheet_check.rows if not row.trade}
+    assert rows["12001"].status == NO_CONFIRMATION and "Modern" in rows["12001"].notes[0]
+    assert rows["12002"].status == NO_CONFIRMATION and "blank" in rows["12002"].notes[0]
+    assert rows["12003"].status == OUTSIDE_PERIOD and "Sep 2026" in rows["12003"].notes[0]
+    assert rows["11120"].status == EVERGREEN
+    term = next(t for t in r.sheet_trades if t.contract_no == "11120")
+    assert term.family == "Trade sheet - Term" and term.source_label == "Trade sheet - Term"
+    html, data = _dashboard_data(r.dashboard)
+    by = {c["check"]: c for c in data["checks"]}
+    assert by["Brokered deals in the period without a broker confirm"]["value"] == 2
+    assert data["kpi"]["broker_missing"] == 2 and 'id="rulegrid"' in html
+
+
+def _direct_sheet(folder, volume=-2500):
+    return _rules_sheet(folder, [
+        _row(13001, datetime(2026, 10, 3), "SYN Ice Co", "Libby", "Sell", volume, "LSB", "USD",
+             datetime(2026, 11, 1), "Fixed", -6, "Direct"),
+        _row(13002, datetime(2026, 10, 4), "SYN Ice Two", "Libby", "Buy", 1000, "Midale",
+             "CAD", datetime(2026, 11, 1), "Index", None, "Direct")])
+
+
+def test_direct_trades_wait_for_a_person_and_the_register_remembers(tmp_path):
+    from riskparse.confirmlog import AWAITING, CONFIRMED, DISPUTED, FILE
+    results = tmp_path / "2. Raw Data"
+    ts = _direct_sheet(tmp_path / "ts")
+    r = build_review(_zip(tmp_path), results_root=results, trade_sheet=ts)
+    register = results / FILE
+    assert r.confirm_log == register and register.is_file()
+    assert {c.status for c in r.direct_confirmations.values()} == {AWAITING}
+    html, data = _dashboard_data(r.dashboard)
+    by = {c["check"]: c for c in data["checks"]}
+    assert by["Direct (ICE) trades not yet confirmed by a person"]["value"] == 2
+    assert data["kpi"]["direct_awaiting"] == 2 and data["kpi"]["direct_confirmed"] == 0
+
+    # a person confirms one (Y) and the counterparty disagrees with the other (N)
+    wb = load_workbook(register)
+    ws = wb.active
+    head = [c.value for c in ws[1]]
+    for row in ws.iter_rows(min_row=2):
+        rec = dict(zip(head, (c.value for c in row), strict=True))
+        col = head.index("Confirmed with counterparty (Y/N)")
+        row[col].value = "Y" if rec["Contract #"] == "13001" else "N"
+        row[head.index("Confirmed by")].value = "A. Risk"
+        row[head.index("Notes")].value = "" if rec["Contract #"] == "13001" else "volume 900"
+    wb.save(register)
+    r2 = build_review(_zip(tmp_path), results_root=results, trade_sheet=ts)
+    st = {t.contract_no: r2.direct_confirmations[id(t)] for t in r2.sheet_trades}
+    assert st["13001"].status == CONFIRMED and st["13001"].by == "A. Risk"
+    assert st["13002"].status == DISPUTED
+    disputed = next(t for t in r2.sheet_trades if t.contract_no == "13002")
+    assert any("does not agree" in f and "volume 900" in f for f in disputed.flags)
+    text = format_summary(r2)
+    assert "Direct (ICE) trades confirmed by a person: 1 of 2 (1 the counterparty " \
+           "disagrees with, 0 awaiting)" in text
+    checks = {row[0]: row for row in load_workbook(r2.raw_data)["checks"].iter_rows(
+        min_row=2, values_only=True)}
+    assert "Human confirmation: CONFIRMED by A. Risk" in checks["13001"][10]
+
+    # the trade sheet row changes: a new trade to confirm; the old row stays, marked
+    ts2 = _direct_sheet(tmp_path / "ts2", volume=-3000)
+    r3 = build_review(_zip(tmp_path), results_root=results, trade_sheet=ts2)
+    st3 = {t.contract_no: r3.direct_confirmations[id(t)].status for t in r3.sheet_trades}
+    assert st3 == {"13001": AWAITING, "13002": DISPUTED}
+    ws = load_workbook(register).active
+    head = [c.value for c in ws[1]]
+    recs = [dict(zip(head, (c.value for c in row), strict=True))
+            for row in ws.iter_rows(min_row=2)]
+    assert len(recs) == 3
+    old = next(x for x in recs if x["Contract #"] == "13001" and x["Volume (m3)"] == 2500)
+    assert old["On the trade sheet"] == "no longer" and old["Confirmed by"] == "A. Risk"

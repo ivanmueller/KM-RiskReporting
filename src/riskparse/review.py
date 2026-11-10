@@ -112,7 +112,9 @@ class ReviewResult:
     sheet_errors: dict[str, str] = field(default_factory=dict)      # label -> why not read
     financial: list = field(default_factory=list)        # FinancialRow per bank swap
     dashboard: Path | None = None
-    sheet_trades: list[Trade] = field(default_factory=list)  # Evergreen / Direct (ICE) rows
+    sheet_trades: list[Trade] = field(default_factory=list)  # Evergreen / Term / Direct rows
+    direct_confirmations: dict = field(default_factory=dict)  # id(trade) -> Confirmation
+    confirm_log: Path | None = None                          # Direct trade confirmations.xlsx
     report_xlsx: Path | None = None                      # daily risk report (Excel)
     report_pdf: Path | None = None                       # daily risk report (PDF)
     source: str = ""
@@ -159,7 +161,7 @@ def _put(ws, row: int, values: list) -> None:
 REVIEW_ROOT = "contracts-data"
 MONTHLY_LABEL = "monthly trade sheet"
 # Bump with every change to the output, so a printed summary shows which code produced it.
-REVIEW_BUILD = "2026-11-10e (Evergreen + Direct trades from the trade sheet; Location)"
+REVIEW_BUILD = "2026-11-10f (Term as Evergreen; broker month rule; direct confirmations)"
 
 
 def default_out_dir(src: Path, now: datetime | None = None) -> Path:
@@ -195,10 +197,12 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
             names_path = project_file(DEFAULT_MAP)
         if names_path is not None:
             nmap = load_name_map(names_path)
-    if out_dir is None and results_root is not None:
-        out_dir = Path(results_root) / f"{src.stem}_{datetime.now():%Y-%m-%d_%H%M%S}"
     if out_dir is None:
-        out_dir = default_out_dir(src)
+        out_dir = (Path(results_root) / f"{src.stem}_{datetime.now():%Y-%m-%d_%H%M%S}"
+                   if results_root is not None else default_out_dir(src))
+        n, base = 2, Path(out_dir)
+        while Path(out_dir).exists():            # two runs in the same second
+            out_dir, n = base.with_name(f"{base.name}-{n}"), n + 1
     out = check_output_location(out_dir, *([src] if src.is_dir() else []))
     out.mkdir(parents=True)
     result = ReviewResult(out, out / "review.xlsx", out / "raw-data.xlsx",
@@ -269,6 +273,21 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
             result.sheet_errors[label] = str(exc)
             result.issues.append((str(location), "TRADE_SHEET_NOT_READ", f"{label}: {exc}"))
     tag_locations(result.trades)
+    direct = [t for t in result.sheet_trades if "Direct" in t.family]
+    if direct:
+        from riskparse.confirmlog import DISPUTED, FILE, ConfirmLogError, update_log
+        folder = Path(results_root) if results_root is not None else out.parent
+        try:
+            result.direct_confirmations, note = update_log(folder, direct)
+            result.confirm_log = folder / FILE
+            if note:
+                result.issues.append((FILE, "CONFIRMATION_REGISTER_NOT_SAVED", note))
+        except ConfirmLogError as exc:
+            result.issues.append((FILE, "CONFIRMATION_REGISTER_NOT_READ", str(exc)))
+        for t in direct:
+            c = result.direct_confirmations.get(id(t))
+            if c is not None and c.status == DISPUTED:
+                t.flags.append(f"direct trade: the counterparty does not agree ({c.text()})")
     for f in result.financial:
         f.trade.flags.append(f"financial ({f.kind.lower()}): bank swap, not on the trade "
                              "sheets by design")
@@ -370,11 +389,15 @@ def _sheet_status(result: ReviewResult, t: Trade) -> str:
         return f"FINANCIAL: {fin.kind}" + (f" with {fin.partner.contract_no}" if fin.partner
                                             else "")
     if any(t is x for x in result.sheet_trades):
-        kind = "Direct (ICE)" if "Direct" in t.family else "Evergreen"
-        why = ("no broker confirm - taken from the trade sheet as correct; confirm it with "
-               "the counterparty" if kind.startswith("Direct") else
-               "rolling agreement - no contract in the contracts folder")
-        return f"TRADE SHEET ONLY - {kind} ({t.documents[0] if t.documents else ''}): {why}"
+        kind = t.family.removeprefix("Trade sheet - ")
+        where = t.documents[0] if t.documents else ""
+        if kind.startswith("Direct"):
+            c = result.direct_confirmations.get(id(t))
+            human = c.text() if c is not None else "not recorded (register not available)"
+            return (f"TRADE SHEET ONLY - Direct (ICE) ({where}): no broker confirm - the "
+                    f"trade sheet is taken as correct. Human confirmation: {human}")
+        return (f"TRADE SHEET ONLY - {kind} ({where}): standing agreement - no contract in "
+                "the contracts folder")
     lines = []
     for c in result.sheet_checks:
         row = c.for_trade(t)
@@ -529,7 +552,15 @@ def _sheet_summary(result: ReviewResult) -> list[str]:
         lines.append(f"  brokered deals with no broker confirm     "
                      f"{c.count(sc.NO_CONFIRMATION)} (in the confirmation period)")
         lines.append(f"  trade sheet only, added to raw-data       "
-                     f"{c.count(sc.EVERGREEN)} Evergreen, {c.count(sc.DIRECT_ICE)} Direct (ICE)")
+                     f"{c.count(sc.EVERGREEN)} Evergreen/Term, {c.count(sc.DIRECT_ICE)} "
+                     "Direct (ICE)")
+    if result.direct_confirmations:
+        from riskparse.confirmlog import AWAITING, CONFIRMED, DISPUTED
+        st = Counter(c.status for c in result.direct_confirmations.values())
+        lines.append(f"Direct (ICE) trades confirmed by a person: {st[CONFIRMED]} of "
+                     f"{len(result.direct_confirmations)} ({st[DISPUTED]} the counterparty "
+                     f"disagrees with, {st[AWAITING]} awaiting) - register: "
+                     f"{result.confirm_log.name if result.confirm_log else 'not available'}")
     lines.append(f"Bank swaps: {fin.get(sc.ROLL, 0) // 2} roll(s) of two swaps, "
                  f"{fin.get(sc.FORWARD_HEDGE, 0)} forward hedge(s), {fin.get(sc.SWAP, 0)} other")
     return lines

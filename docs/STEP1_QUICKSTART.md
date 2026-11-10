@@ -127,11 +127,23 @@ and a **source of trades** itself. A trade reaches the desk in one of three ways
 | How it was done | Record | What the system does |
 | --- | --- | --- |
 | Through a **bank** (swaps) | the bank's confirmation (ISDA) | read from the confirmation; not on the trade sheet by design |
-| Through a **broker** (Modern, CalRock = CR, One Exchange = OX, Marex) | a broker confirm, and the trade sheet row | both must match; a trade sheet row with no confirm is a **missing broker confirm** |
-| **Direct** on ICE (`Direct` in Broker / Direct, column V) | the trade sheet only | brought into raw-data from the trade sheet and taken as correct; the only independent check is a **person confirming it with the counterparty** (mark the Risk check column on the checks sheet) |
+| Through a **broker** (Modern, CalRock = CR, One Exchange = OX, Marex) | a broker confirm, and the trade sheet row | everything must match; any difference is flagged; a brokered trade sheet row traded in a month the contracts folder covers, with no confirm, is a **missing broker confirm** (also when Broker / Direct is blank) |
+| **Direct** on ICE (`Direct` in Broker / Direct, column V) | the trade sheet only | brought into raw-data from the trade sheet and taken as correct; the only independent check is a **person confirming it with the counterparty**, recorded in the register below |
 
-**Evergreen** rows (`Evergreen` in the Date column, E) are rolling agreements with no contract
-in the contracts folder: they are also brought into raw-data from the trade sheet. Every trade
+**Evergreen** and **Term** rows (in the Date column, E) are standing agreements with no
+contract in the contracts folder: they are also brought into raw-data from the trade sheet.
+
+**Direct trade confirmations.xlsx** (in the results folder) is the permanent record of the
+human check. Every run adds the direct trades it has not seen before and reads back the yellow
+columns: **Confirmed with counterparty (Y/N)**, **Confirmed by**, **Confirmed on**, **Notes**.
+`Y` = confirmed, `N` = the counterparty does not agree (flagged as a break), blank = awaiting.
+If a trade sheet row changes, the changed trade is a new row awaiting confirmation and the old
+row is marked "no longer" on the trade sheet; nothing is deleted. Close the register in Excel
+before RUN.bat so new trades can be added (it is still read while open).
+
+The dashboard's **How each trade is validated** panel shows the rules and this run's counts:
+broker trades (matched, differences, not on the trade sheet, missing broker confirms), direct
+trades (confirmed by a person, awaiting, disputed), bank swaps, and Evergreen / Term rows. Every trade
 in raw-data carries a **Source** (`Confirmation - Modern Commodities`, `Trade sheet - Direct
 (ICE)`, `Trade sheet - Evergreen`) and a **Location** from column N (Cromer, Westspur, Tank,
 Virden, ...): a confirmation matched to the trade sheet takes the trade sheet's Location, an
@@ -167,14 +179,14 @@ candidates. Short names on the trade sheet (BP, CIOL, WCP, ...) are in the count
 | `MATCHED` | Everything agrees |
 | `MATCHED - CHECK DIFFERENCES` | Same deal, but a differential, date, broker, currency, trader or volume differs: listed |
 | `NOT ON TRADE SHEET` | A confirmation the desk has not recorded |
-| `NO CONFIRMATION` | A brokered trade sheet deal dated in the confirmations' date range with no broker confirm |
+| `NO CONFIRMATION` | A brokered trade sheet deal traded in a month the contracts folder covers (the months of the confirmations' trade dates), with no broker confirm |
 | `TRADE SHEET ONLY - DIRECT (ICE)` | A direct ICE trade: no confirm by nature; in raw-data from the trade sheet |
-| `TRADE SHEET ONLY - EVERGREEN` | A rolling Evergreen agreement: in raw-data from the trade sheet |
-| `OUTSIDE CONFIRMATION PERIOD` | A trade sheet deal dated outside that range: listed, not flagged |
+| `TRADE SHEET ONLY - EVERGREEN / TERM` | A standing Evergreen or Term agreement: in raw-data from the trade sheet |
+| `OUTSIDE THE CONTRACTS' MONTHS` | A brokered deal traded in a month the contracts folder does not cover: its confirm is with that month's contracts; listed, not flagged |
 | `MONTH NOT ON THIS SHEET` | The sheet holds no rows for that delivery month (e.g. next month's workbook is not in the folder yet) |
 
-Term / Spot rows and internal rows that are neither Evergreen nor Direct are counted, not
-flagged.
+Undated Spot rows and internal rows that are neither Evergreen, Term nor Direct are counted,
+not flagged.
 
 **Volumes:** buys agree exactly. Sales at Cromer are often lower on the trade sheet by the
 same percentage for every sale to the same counterparty in a month (for example 91% of the
