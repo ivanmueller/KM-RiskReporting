@@ -37,7 +37,7 @@ ruff check src tests
 riskparse demo-smoke --workdir var/demo
 ```
 
-Windows/PowerShell equivalents are in `docs/DEVELOPER.md`. Expected result: `410 passed` (the
+Windows/PowerShell equivalents are in `docs/DEVELOPER.md`. Expected result: `413 passed` (the
 repository-hygiene tests skip outside a git checkout), and the demo ends with `SMOKE DEMO: PASS`.
 
 > **Step 1 entry point:** `riskparse review <zip or folder>` (Windows: `SETUP.bat`, `RUN.bat`; columns from `config/raw-data-format.xlsx`)
@@ -48,7 +48,8 @@ repository-hygiene tests skip outside a git checkout), and the demo ends with `S
 > mapped to master names by `config/counterparty_map.csv` (`src/riskparse/names.py`;
 > maintained by Risk; unmapped spellings are kept as written and flagged). The run checks the
 > confirmations against the monthly trade sheet (`<Month> Trading <Year>`, Trading tab;
-> `tradesheet.py`, `sheetcheck.py`: composite
+> `tradesheet.py`, `sheetcheck.py`; its Evergreen and Direct (ICE) rows, which have no
+> contract, are brought into raw-data from the trade sheet with Source and Location: composite
 > match, apportioned volumes, missing confirmations, bank swaps as rolls or forward hedges)
 > and writes `dashboard.html`, served on 127.0.0.1 by `riskparse dashboard`
 > (`dashboard.py`), and the daily risk report "CTT Position Summary" as Excel and PDF

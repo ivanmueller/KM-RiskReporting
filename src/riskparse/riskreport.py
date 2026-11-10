@@ -85,6 +85,11 @@ class ReportData:
                             "folder)" if other else "")
                          + f"; {s.get('missing', 0)} trade sheet deals have no confirmation "
                            "yet.")
+        if k.get("sheet_direct") or k.get("sheet_evergreen"):
+            parts.append(f"From the trade sheet with no contract: {k.get('sheet_direct', 0)} "
+                         f"direct (ICE) trades, taken as correct until a person confirms them "
+                         f"with the counterparty, and {k.get('sheet_evergreen', 0)} Evergreen "
+                         "rows.")
         if k.get("financial"):
             parts.append(f"Bank swaps: {k.get('rolls', 0)} roll(s) and {k.get('hedges', 0)} "
                          f"forward hedge(s), {k.get('swap_bbl', 0):,.0f} bbl.")

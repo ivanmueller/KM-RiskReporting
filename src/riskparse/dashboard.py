@@ -27,10 +27,11 @@ from pathlib import Path
 
 from riskparse.sheetcheck import (
     DIFFERENCES,
+    DIRECT_ICE,
+    EVERGREEN,
     MATCHED,
     MONTH_NOT_COVERED,
     NO_CONFIRMATION,
-    NO_CONFIRMATION_DIRECT,
     NOT_ON_SHEET,
     OUTSIDE_PERIOD,
     is_financial,
@@ -104,7 +105,8 @@ def _source(chk) -> dict:
         "kpi": {"matched": count(MATCHED) + count(DIFFERENCES),
                 "differences": count(DIFFERENCES), "not_on_sheet": count(NOT_ON_SHEET),
                 "month_not_covered": count(MONTH_NOT_COVERED),
-                "missing": count(NO_CONFIRMATION) + count(NO_CONFIRMATION_DIRECT),
+                "missing": count(NO_CONFIRMATION),
+                "evergreen": count(EVERGREEN), "direct": count(DIRECT_ICE),
                 "outside": count(OUTSIDE_PERIOD)},
         "recon": recon, "position": position}
 
@@ -195,18 +197,52 @@ def build_data(result) -> dict:
               "Same deal on both, but a field differs: the confirmation or the trade sheet "
               "needs correcting.",
               {"section": "reconsec", "source": i, "filter": DIFFERENCES})
-        check(f"{src['label'][0].upper()}{src['label'][1:]} deals in the period without a "
-              "confirmation",
+        check("Brokered deals in the period without a broker confirm",
               [f"{r['sheet_contract']} - {r['counterparty']} {r['side']} {r['grade']} "
-               f"{r['month']} ({r['sheet_broker'] or 'direct'})"
-               for r in rows if r["status"] in (NO_CONFIRMATION, NO_CONFIRMATION_DIRECT)],
-              "Ask the broker or counterparty for the confirmation, and add it to the "
-              "contracts folder.",
+               f"{r['month']} ({r['sheet_broker'] or 'no broker given'})"
+               for r in rows if r["status"] == NO_CONFIRMATION],
+              "Everything done through a broker should match a broker confirm: ask the broker "
+              "for it and add it to the contracts folder.",
               {"section": "reconsec", "source": i, "filter": "MISSING"})
     check("Bank swaps not identified as a roll or forward hedge",
           [f"{f.trade.contract_no} - {f.trade.side} {f.trade.term}"
            for f in financial if f.kind == "SWAP"],
           "Check what these swaps hedge.", {"section": "finsec"})
+    sheet_trades = list(getattr(result, "sheet_trades", []) or [])
+    sheet_only = []
+    for t in sheet_trades:
+        evergreen = "Evergreen" in t.family
+        diff = "" if t.fixed_differential is None else f"{_f(t.fixed_differential):g}"
+        if t.secondary_index:                                   # index-priced (COMM)
+            basis = f"{t.secondary_index} {diff}".strip()
+        else:
+            basis = f"Fixed {diff}" if diff else ""
+        if t.trade_date:
+            when = _f(t.trade_date)
+        else:
+            when = "Evergreen" if evergreen else ""
+        sheet_only.append({
+            "type": "Evergreen" if evergreen else "Direct (ICE)",
+            "contract": t.contract_no, "trade_date": when,
+            "counterparty": t.counterparty or "(no counterparty)", "trader": t.trader,
+            "side": t.side, "quantity": _f(t.quantity), "grade": t.grade,
+            "location": t.location, "month": month_label(month_of(t.start_date)),
+            "basis": basis, "currency": t.currency,
+            "stream": t.evidence.get("stream", "").rsplit(": ", 1)[-1],
+            "where": t.documents[0] if t.documents else ""})
+    sheet_ids = {id(t) for t in sheet_trades}
+    loc = defaultdict(lambda: {"bought": 0.0, "sold": 0.0, "trades": 0, "confirmed": 0})
+    for t in physical + sheet_trades:
+        m3 = _m3(t)
+        if m3 is None or not t.start_date:
+            continue
+        key = (t.location or "(no location)", month_of(t.start_date))
+        loc[key]["bought" if t.side == "BUY" else "sold"] += m3
+        loc[key]["trades"] += 1
+        loc[key]["confirmed"] += 0 if id(t) in sheet_ids else 1
+    locations = [{"location": k[0], "month": month_label(k[1]), **v,
+                  "net": v["bought"] - v["sold"]}
+                 for k, v in sorted(loc.items(), key=lambda kv: (kv[0][1], kv[0][0]))]
     return {
         "generated": f"{datetime.now():%Y-%m-%d %H:%M}",
         "position_date": f"{date.today():%B} {date.today().day}, {date.today():%Y}",
@@ -217,7 +253,10 @@ def build_data(result) -> dict:
                 "validated_all": both,
                 "swap_bbl": sum(float(f.trade.quantity or 0) for f in financial),
                 "rolls": sum(1 for f in financial if f.kind == "ROLL") // 2,
-                "hedges": sum(1 for f in financial if f.kind == "FORWARD HEDGE")},
+                "hedges": sum(1 for f in financial if f.kind == "FORWARD HEDGE"),
+                "sheet_evergreen": sum(1 for r in sheet_only if r["type"] == "Evergreen"),
+                "sheet_direct": sum(1 for r in sheet_only if r["type"] != "Evergreen")},
+        "sheet_only": sheet_only, "locations": locations,
         "checks": checks, "financial": fin_rows, "conf_position": conf_position,
         "counterparties": counterparties,
         "attention": [{"contract": t.contract_no, "counterparty": t.counterparty,
@@ -365,7 +404,9 @@ th{font-size:12px;color:var(--muted);font-weight:600;background:var(--panel)}
 td.n,th.n{text-align:right}
 .pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;white-space:nowrap}
 .ok{background:var(--okbg);color:var(--ok)}.bad{background:var(--badbg);color:var(--bad)}
-.warn{background:var(--warnbg);color:var(--warn)}.mute{background:var(--chip);color:var(--muted)}
+.warn{background:var(--warnbg);color:var(--warn)}
+.info{background:#e6effa;color:#24548f}
+@media (prefers-color-scheme:dark){.info{background:#16263b;color:#8fb8ea}}.mute{background:var(--chip);color:var(--muted)}
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
 .chips button,.tabs button{border:1px solid var(--line);background:var(--chip);color:var(--ink);
 border-radius:99px;padding:4px 12px;cursor:pointer;font:inherit}
@@ -457,17 +498,26 @@ volume-weighted differential (USD/bbl).</p><div id="confbars"></div>
 <section id="reconsec"><h2>Trade sheet reconciliation</h2><div class="tabs" id="srctabs"></div>
 <p class="sub" id="reconsub"></p><div class="chips" id="chips"></div>
 <div class="scroll"><table id="recon"></table></div></section>
+<section id="sheetonly"><h2>Trade sheet only (no contract)</h2><p class="sub">Rows of the
+trade sheet that have no contract by nature, brought into raw-data from the trade sheet.
+<b>Direct (ICE)</b> trades have no broker confirm: the trade sheet is taken as correct, and the
+only independent check is a person confirming them with the counterparty (mark the Risk check
+column of the checks sheet). <b>Evergreen</b> rows are rolling agreements.</p>
+<div class="chips" id="sochips"></div><div class="scroll"><table id="sotable"></table></div></section>
 <section id="finsec"><h2>Financial swaps (bank)</h2><p class="sub">Not on the trade sheets by design. A
 roll is two swaps (four legs) moving exposure from one month to the next; a forward hedge
 locks in a price months ahead.</p><div class="scroll"><table id="fin"></table></div>
 </section>
 <div class="grid2">
+<section><h2>Position by location (m3)</h2><p class="sub">Confirmed physical trades (with
+the trade sheet's Location when matched) and the trade sheet only trades, per delivery
+month.</p><div class="scroll"><table id="loctable"></table></div></section>
 <section><h2>Counterparties (confirmed m3)</h2><div class="legend"><span><i
 style="background:var(--buy)"></i>bought</span><span><i style="background:var(--sell)"></i>sold
 </span></div><div id="cpty"></div></section>
+</div>
 <section><h2>Needs attention</h2><p class="sub">Everything flagged on the checks sheet.</p>
 <div id="att"></div></section>
-</div>
 <p class="note" id="foot"></p>
 </main>
 <script id="data" type="application/json">__DATA__</script>
@@ -476,7 +526,7 @@ const D = JSON.parse(document.getElementById('data').textContent);
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const num = (v, d=0, maxd=d) => v == null || v === '' ? '' : Number(v).toLocaleString('en-CA', {minimumFractionDigits:d, maximumFractionDigits:maxd});
-const statusClass = s => s.startsWith('MATCHED -') || s === 'NOT ON TRADE SHEET' ? 'bad' :
+const statusClass = s => s.startsWith('TRADE SHEET ONLY') ? 'info' : s.startsWith('MATCHED -') || s === 'NOT ON TRADE SHEET' ? 'bad' :
   s.startsWith('NO CONFIRMATION') ? 'warn' : s === 'MATCHED' ? 'ok' : 'mute';
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -492,6 +542,7 @@ D.sources.forEach(s => {
   kp.push([`On ${s.named}`, `${pct}%`, `${k.matched} of ${base} physical; ${k.differences} differ, ${k.not_on_sheet} missing from it, ${k.missing} of its deals unconfirmed` + (k.month_not_covered ? `; ${k.month_not_covered} for months it does not hold` : '')]);
 });
 if (D.sources.length > 1) kp.push(['Validated on both', K.validated_all, `of ${K.physical} physical confirmations`]);
+if (K.sheet_direct + K.sheet_evergreen) kp.push(['Trade sheet only', K.sheet_direct + K.sheet_evergreen, `no contract: ${K.sheet_direct} direct (ICE) - a person confirms them; ${K.sheet_evergreen} Evergreen`]);
 kp.push(['Bank swaps', num(K.swap_bbl), `bbl; ${K.rolls} roll(s), ${K.hedges} forward hedge(s)`]);
 const vol = {}; D.conf_position.forEach(p => vol[p.month] = (vol[p.month] || 0) + p.bought + p.sold);
 const main = Object.keys(vol).sort((a, b) => vol[b] - vol[a])[0] || '';
@@ -566,14 +617,14 @@ function posTable(el, rows, diffs) {
 monthBars('confbars', D.conf_position); posTable('confpos', D.conf_position, true);
 
 let src = 0, filter = 'IN PERIOD';
-const inGroup = (r, f) => f === 'ALL' || (f === 'IN PERIOD' ? !['OUTSIDE CONFIRMATION PERIOD', 'MONTH NOT ON THIS SHEET'].includes(r.status) : f === 'MISSING' ? r.status.startsWith('NO CONFIRMATION') : r.status === f);
+const inGroup = (r, f) => f === 'ALL' || (f === 'IN PERIOD' ? !['OUTSIDE CONFIRMATION PERIOD', 'MONTH NOT ON THIS SHEET'].includes(r.status) && !r.status.startsWith('TRADE SHEET ONLY') : f === 'MISSING' ? r.status.startsWith('NO CONFIRMATION') : r.status === f);
 function drawSource() {
   const S = D.sources[src];
   $('sheetposh').textContent = `${cap(S.label)}: position by delivery month (m3)`;
   $('sheetsub').textContent = `Sum of its volumes as entered (${S.tabs.join(', ')}), including standing agreements and internal rows.`;
   monthBars('sheetbars', S.position); posTable('sheetpos', S.position, false);
   const p = S.period;
-  $('reconsub').textContent = `${S.files.join(', ')}: confirmations ${p ? `dated ${p[0]} to ${p[1]}` : ''} compared with its ${S.rows} rows. Matched on counterparty, side, grade and delivery month; then differential, trade date, broker and volume. ${S.standing} standing (Evergreen/Term) and ${S.internal} internal rows are not expected to have confirmations.` + (S.missing.length ? ` Not in the folder yet: ${S.missing.join(', ')}.` : '');
+  $('reconsub').textContent = `${S.files.join(', ')}: confirmations ${p ? `dated ${p[0]} to ${p[1]}` : ''} compared with its ${S.rows} rows. Matched on counterparty, side, grade and delivery month; then differential, trade date, broker and volume. ${S.standing} Term/Spot and ${S.internal} internal rows are not expected to have confirmations; Evergreen and Direct (ICE) rows are listed under Trade sheet only.` + (S.missing.length ? ` Not in the folder yet: ${S.missing.join(', ')}.` : '');
   const counts = {}; S.recon.forEach(r => counts[r.status] = (counts[r.status] || 0) + 1);
   const missing = S.recon.filter(r => inGroup(r, 'MISSING')).length;
   const chips = [['IN PERIOD', S.recon.filter(r => inGroup(r, 'IN PERIOD')).length], ...(missing ? [['MISSING', missing]] : []), ...Object.entries(counts), ['ALL', S.recon.length]];
@@ -603,6 +654,23 @@ if (D.sources.length) {
 $('fin').innerHTML = D.financial.length ? '<tr><th>Contract #</th><th>Type</th><th>Paired with</th><th>Side</th><th>Month</th><th class="n">Quantity</th><th class="n">Fixed price</th><th>Counterparty</th><th>Trade date</th><th>What it is</th></tr>' +
   D.financial.map(f => `<tr><td>${esc(f.contract)}</td><td><span class="pill ${f.kind === 'SWAP' ? 'bad' : 'ok'}">${esc(f.kind)}</span></td><td>${esc(f.partner)}</td><td>${esc(f.side)}</td><td>${esc(f.term)}</td><td class="n">${num(f.quantity)} ${esc(f.unit)}</td><td class="n">${num(f.fixed_price, 2)} ${esc(f.price_unit)}</td><td>${esc(f.counterparty)}</td><td>${esc(f.trade_date)}</td><td class="note wrap">${esc(f.note)}</td></tr>`).join('')
   : '<tr><td class="empty">No bank swaps in this run.</td></tr>';
+
+let soFilter = 'ALL';
+function drawSheetOnly() {
+  const all = D.sheet_only || [];
+  if (!all.length) { $('sheetonly').remove(); return; }
+  const n = t => all.filter(r => r.type === t).length;
+  $('sochips').innerHTML = [['ALL', `All (${all.length})`], ['Direct (ICE)', `Direct (ICE) (${n('Direct (ICE)')})`], ['Evergreen', `Evergreen (${n('Evergreen')})`]]
+    .map(([k, l]) => `<button data-k="${esc(k)}" class="${k === soFilter ? 'on' : ''}">${esc(l)}</button>`).join('');
+  const rows = all.filter(r => soFilter === 'ALL' || r.type === soFilter);
+  $('sotable').innerHTML = '<tr><th>Type</th><th>Contract #</th><th>Trade date</th><th>Counterparty</th><th>Trader</th><th>Side</th><th class="n">Volume m3</th><th>Grade</th><th>Location</th><th>Month</th><th>Price</th><th>Currency</th><th>Stream</th><th>Trade sheet row</th></tr>' +
+    rows.map(r => `<tr><td><span class="pill ${r.type === 'Evergreen' ? 'mute' : 'info'}">${esc(r.type)}</span></td><td>${esc(r.contract)}</td><td>${esc(r.trade_date)}</td><td>${esc(r.counterparty)}</td><td>${esc(r.trader)}</td><td>${esc(r.side)}</td><td class="n">${num(r.quantity, 0, 2)}</td><td>${esc(r.grade)}</td><td>${esc(r.location)}</td><td>${esc(r.month)}</td><td>${esc(r.basis)}</td><td>${esc(r.currency)}</td><td>${esc(r.stream)}</td><td class="note">${esc(r.where)}</td></tr>`).join('');
+}
+$('sochips').onclick = e => { const b = e.target.closest('button'); if (!b) return; soFilter = b.dataset.k; drawSheetOnly(); };
+drawSheetOnly();
+$('loctable').innerHTML = (D.locations || []).length ? '<tr><th>Location</th><th>Month</th><th class="n">Bought</th><th class="n">Sold</th><th class="n">Net m3</th><th class="n">Trades</th><th class="n">Confirmed</th></tr>' +
+  D.locations.map(r => `<tr><td>${esc(r.location)}</td><td>${esc(r.month)}</td><td class="n">${num(r.bought)}</td><td class="n">${num(r.sold)}</td><td class="n"><b>${num(r.net)}</b></td><td class="n">${r.trades}</td><td class="n">${r.confirmed}</td></tr>`).join('')
+  : '<tr><td class="empty">No physical trades.</td></tr>';
 
 const cmax = Math.max(1, ...D.counterparties.map(c => Math.max(c.bought, c.sold)));
 $('cpty').innerHTML = D.counterparties.map(c => `<div class="bar"><div class="lab" title="${esc(c.name)}">${esc(c.name)}</div><div class="track">

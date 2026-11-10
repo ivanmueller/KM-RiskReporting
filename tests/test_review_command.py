@@ -58,14 +58,14 @@ def test_review_produces_one_row_per_trade_in_the_firm_format(tmp_path):
 
 def test_old_format_without_fixed_price_gets_the_column_added(tmp_path):
     wb = Workbook()
-    wb.active.append(DEFAULT_HEADERS[:-2])                # the original 14-column format
+    wb.active.append(DEFAULT_HEADERS[:-4])                # the original 14-column format
     wb.save(tmp_path / "old-format.xlsx")
     r = build_review(_zip(tmp_path), tmp_path / "out", format_path=tmp_path / "old-format.xlsx")
     rows = list(load_workbook(r.raw_data)["raw-data-format"].iter_rows(values_only=True))
     assert list(rows[0]) == DEFAULT_HEADERS     # Fixed Price, Currency after Fixed Differential
     by_no = {row[0]: dict(zip(DEFAULT_HEADERS, row, strict=True)) for row in rows[1:]}
     assert by_no["181000001"]["Fixed Price"] == 106.12
-    assert r.format_added == ["Fixed Price", "Currency"]
+    assert r.format_added == ["Fixed Price", "Currency", "Location", "Source"]
     assert by_no["181000001"]["Currency"] == "CAD"
     assert "[added: not in your format file]" in format_summary(r)
 

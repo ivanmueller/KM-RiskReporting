@@ -62,6 +62,8 @@ from riskparse.sheetcheck import (
     is_financial,
     month_label,
     month_of,
+    sheet_only_trades,
+    tag_locations,
 )
 from riskparse.tradesheet import TradeSheetError, load_trade_sheet
 
@@ -110,6 +112,7 @@ class ReviewResult:
     sheet_errors: dict[str, str] = field(default_factory=dict)      # label -> why not read
     financial: list = field(default_factory=list)        # FinancialRow per bank swap
     dashboard: Path | None = None
+    sheet_trades: list[Trade] = field(default_factory=list)  # Evergreen / Direct (ICE) rows
     report_xlsx: Path | None = None                      # daily risk report (Excel)
     report_pdf: Path | None = None                       # daily risk report (PDF)
     source: str = ""
@@ -117,6 +120,12 @@ class ReviewResult:
 
     def counts(self) -> Counter:
         return Counter((d["folder_class"], d["type"], d["status"]) for d in self.documents)
+
+    @property
+    def book(self) -> list[Trade]:
+        """Every trade in raw-data: the confirmed ones, then the trade sheet rows with no
+        contract (Evergreen agreements and Direct trades on ICE)."""
+        return self.trades + self.sheet_trades
 
     @property
     def sheet_check(self) -> SheetCheck | None:
@@ -150,7 +159,7 @@ def _put(ws, row: int, values: list) -> None:
 REVIEW_ROOT = "contracts-data"
 MONTHLY_LABEL = "monthly trade sheet"
 # Bump with every change to the output, so a printed summary shows which code produced it.
-REVIEW_BUILD = "2026-11-10d (daily risk report xlsx + pdf, export button)"
+REVIEW_BUILD = "2026-11-10e (Evergreen + Direct trades from the trade sheet; Location)"
 
 
 def default_out_dir(src: Path, now: datetime | None = None) -> Path:
@@ -252,10 +261,14 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
             continue
         try:
             sheet = load_trade_sheet(location, monthly=monthly, months=months, label=label)
-            result.sheet_checks.append(check_against_sheet(result.trades, sheet, nmap))
+            check = check_against_sheet(result.trades, sheet, nmap)
+            result.sheet_checks.append(check)
+            if monthly:
+                result.sheet_trades = sheet_only_trades(check, nmap)
         except TradeSheetError as exc:
             result.sheet_errors[label] = str(exc)
             result.issues.append((str(location), "TRADE_SHEET_NOT_READ", f"{label}: {exc}"))
+    tag_locations(result.trades)
     for f in result.financial:
         f.trade.flags.append(f"financial ({f.kind.lower()}): bank swap, not on the trade "
                              "sheets by design")
@@ -274,7 +287,9 @@ def build_review(source: str | Path, out_dir: str | Path | None = None, *,
 
 # columns every output gets, if the format file has the price columns but not these
 _PRICE_COLUMNS = (("Fixed Price", "fixed_price", "fixed_differential"),
-                  ("Currency", "price_currency", "fixed_price"))
+                  ("Currency", "price_currency", "fixed_price"),
+                  ("Location", "location", "price_currency"),
+                  ("Source", "source_label", "location"))
 
 
 def _with_price_columns(headers: list[str]) -> tuple[list[str], list[str]]:
@@ -341,7 +356,7 @@ def _name_rows(parsed: list[Trade], nmap: NameMap | None) -> list[list]:
 # --------------------------------------------------------------------------- writers
 
 def _format_rows(result: ReviewResult):
-    for t in result.trades:
+    for t in result.book:
         yield [cell_value(t, a) if (a := attr_for(h)) else None for h in result.format_headers]
 
 
@@ -354,6 +369,12 @@ def _sheet_status(result: ReviewResult, t: Trade) -> str:
     if fin is not None:
         return f"FINANCIAL: {fin.kind}" + (f" with {fin.partner.contract_no}" if fin.partner
                                             else "")
+    if any(t is x for x in result.sheet_trades):
+        kind = "Direct (ICE)" if "Direct" in t.family else "Evergreen"
+        why = ("no broker confirm - taken from the trade sheet as correct; confirm it with "
+               "the counterparty" if kind.startswith("Direct") else
+               "rolling agreement - no contract in the contracts folder")
+        return f"TRADE SHEET ONLY - {kind} ({t.documents[0] if t.documents else ''}): {why}"
     lines = []
     for c in result.sheet_checks:
         row = c.for_trade(t)
@@ -367,8 +388,8 @@ def _sheet_status(result: ReviewResult, t: Trade) -> str:
 
 
 def _check_rows(result: ReviewResult):
-    for t in result.trades:
-        yield [t.contract_no, t.side, t.family, t.broker, t.currency, t.price_unit,
+    for t in result.book:
+        yield [t.contract_no, t.side, t.source_label, t.broker, t.currency, t.price_unit,
                cell_value(t, "fixed_price"), t.location, "\n".join(t.documents),
                "\n".join(t.flags), _sheet_status(result, t), None, None, None]
 
@@ -436,7 +457,7 @@ def _write_review(result: ReviewResult, text_rows: list, src: Path) -> None:
     _fill(wb.create_sheet("raw-data-format"), result.format_headers, _format_rows(result))
     _fill(wb.create_sheet("checks"), CHECK_COLUMNS, _check_rows(result), _CHECK_WIDTHS)
     ev = []
-    for n, t in enumerate(result.trades, start=2):
+    for n, t in enumerate(result.book, start=2):
         for h in result.format_headers:
             a = attr_for(h)
             if a and cell_value(t, a) is not None:
@@ -505,9 +526,10 @@ def _sheet_summary(result: ReviewResult) -> list[str]:
         if c.count(sc.MONTH_NOT_COVERED):
             lines.append(f"  confirmations for months it does not hold "
                          f"{c.count(sc.MONTH_NOT_COVERED)}")
-        lines.append(f"  its deals with no confirmation            "
-                     f"{c.count(sc.NO_CONFIRMATION)} brokered, "
-                     f"{c.count(sc.NO_CONFIRMATION_DIRECT)} direct (in the confirmation period)")
+        lines.append(f"  brokered deals with no broker confirm     "
+                     f"{c.count(sc.NO_CONFIRMATION)} (in the confirmation period)")
+        lines.append(f"  trade sheet only, added to raw-data       "
+                     f"{c.count(sc.EVERGREEN)} Evergreen, {c.count(sc.DIRECT_ICE)} Direct (ICE)")
     lines.append(f"Bank swaps: {fin.get(sc.ROLL, 0) // 2} roll(s) of two swaps, "
                  f"{fin.get(sc.FORWARD_HEDGE, 0)} forward hedge(s), {fin.get(sc.SWAP, 0)} other")
     return lines
@@ -543,10 +565,11 @@ def format_summary(result: ReviewResult) -> str:
         lines.append(f"  {n:>3} x {kind}")
     fmt = result.format_file.resolve() if result.format_file else "built-in columns"
     lines += ["", f"Format: {fmt}",
-              f"raw-data-format: filled cells per column (of {len(result.trades)} trades):"]
+              f"raw-data-format: filled cells per column (of {len(result.book)} trades: "
+              f"{len(result.trades)} confirmed, {len(result.sheet_trades)} trade sheet only):"]
     for h in result.format_headers:
         a = attr_for(h)
-        filled = sum(1 for t in result.trades if a and cell_value(t, a) is not None)
+        filled = sum(1 for t in result.book if a and cell_value(t, a) is not None)
         mark = ("  [header not recognised]" if a is None else
                 "  [added: not in your format file]" if h in result.format_added else "")
         lines.append(f"  {h.strip():<20} {filled:>3}{mark}")

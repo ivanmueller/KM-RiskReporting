@@ -119,10 +119,28 @@ month and grade (m3 and bbl, with weighted differentials), the reconciliation (f
 status), the bank swaps, counterparties and everything that needs attention. It needs no
 internet.
 
-## Checking against the monthly trade sheet
+## The monthly trade sheet: checked against, and a source
 
-The confirmations are checked against the desk's **monthly trade sheet**, its **Trading**
-tab. The result is the `monthly trade sheet` sheet in `review.xlsx`, the Trade sheet column
+The monthly trade sheet's **Trading** tab is both what the confirmations are checked against
+and a **source of trades** itself. A trade reaches the desk in one of three ways:
+
+| How it was done | Record | What the system does |
+| --- | --- | --- |
+| Through a **bank** (swaps) | the bank's confirmation (ISDA) | read from the confirmation; not on the trade sheet by design |
+| Through a **broker** (Modern, CalRock = CR, One Exchange = OX, Marex) | a broker confirm, and the trade sheet row | both must match; a trade sheet row with no confirm is a **missing broker confirm** |
+| **Direct** on ICE (`Direct` in Broker / Direct, column V) | the trade sheet only | brought into raw-data from the trade sheet and taken as correct; the only independent check is a **person confirming it with the counterparty** (mark the Risk check column on the checks sheet) |
+
+**Evergreen** rows (`Evergreen` in the Date column, E) are rolling agreements with no contract
+in the contracts folder: they are also brought into raw-data from the trade sheet. Every trade
+in raw-data carries a **Source** (`Confirmation - Modern Commodities`, `Trade sheet - Direct
+(ICE)`, `Trade sheet - Evergreen`) and a **Location** from column N (Cromer, Westspur, Tank,
+Virden, ...): a confirmation matched to the trade sheet takes the trade sheet's Location, an
+unmatched one its own location shortened to the place name (the full wording stays in the
+evidence). Raw-data columns, values and the evidence of these rows all point to their trade
+sheet row. The dashboard lists them under **Trade sheet only (no contract)** and totals every
+trade **by location**.
+
+The check against the confirmations: The result is the `monthly trade sheet` sheet in `review.xlsx`, the Trade sheet column
 of the checks sheet (`Monthly: MATCHED 11836 (October Trading 2026: Trading!row 83)`) and
 the reconciliation in the dashboard. The workbooks are only read, never changed.
 
@@ -149,12 +167,14 @@ candidates. Short names on the trade sheet (BP, CIOL, WCP, ...) are in the count
 | `MATCHED` | Everything agrees |
 | `MATCHED - CHECK DIFFERENCES` | Same deal, but a differential, date, broker, currency, trader or volume differs: listed |
 | `NOT ON TRADE SHEET` | A confirmation the desk has not recorded |
-| `NO CONFIRMATION` | A trade sheet deal dated in the confirmations' date range with no confirmation (`(direct deal)` when it was not brokered) |
+| `NO CONFIRMATION` | A brokered trade sheet deal dated in the confirmations' date range with no broker confirm |
+| `TRADE SHEET ONLY - DIRECT (ICE)` | A direct ICE trade: no confirm by nature; in raw-data from the trade sheet |
+| `TRADE SHEET ONLY - EVERGREEN` | A rolling Evergreen agreement: in raw-data from the trade sheet |
 | `OUTSIDE CONFIRMATION PERIOD` | A trade sheet deal dated outside that range: listed, not flagged |
 | `MONTH NOT ON THIS SHEET` | The sheet holds no rows for that delivery month (e.g. next month's workbook is not in the folder yet) |
 
-Standing agreements (Evergreen / Term rows) and internal rows (KM, opening inventory) are
-counted, not flagged.
+Term / Spot rows and internal rows that are neither Evergreen nor Direct are counted, not
+flagged.
 
 **Volumes:** buys agree exactly. Sales at Cromer are often lower on the trade sheet by the
 same percentage for every sale to the same counterparty in a month (for example 91% of the

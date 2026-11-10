@@ -22,7 +22,8 @@ DEFAULT_FORMAT = Path("config") / "raw-data-format.xlsx"
 
 DEFAULT_HEADERS = ["Contract #", "Trade Date", "Start Date", "End Date", "Term", "Trader",
                    "Counterparty", "Seller", "Quantity", "Unit", "Grade", "Primary Index",
-                   "Secondary Index", "Fixed Differential", "Fixed Price", "Currency"]
+                   "Secondary Index", "Fixed Differential", "Fixed Price", "Currency",
+                   "Location", "Source"]
 
 # format header (normalized) -> Trade attribute
 HEADER_ATTR = {
@@ -39,6 +40,7 @@ HEADER_ATTR = {
     # USD even when the trade settles in CAD); "Settlement Currency" is the payment currency.
     "currency": "price_currency", "price currency": "price_currency",
     "settlement currency": "currency", "location": "location", "broker": "broker",
+    "source": "source_label", "trade source": "source_label",
 }
 
 

@@ -20,11 +20,12 @@ from riskparse.dashboard import FILE, find_dashboard, make_server
 from riskparse.review import build_review, format_summary
 from riskparse.sheetcheck import (
     DIFFERENCES,
+    DIRECT_ICE,
+    EVERGREEN,
     FORWARD_HEDGE,
     MATCHED,
     MONTH_NOT_COVERED,
     NO_CONFIRMATION,
-    NO_CONFIRMATION_DIRECT,
     NOT_ON_SHEET,
     OUTSIDE_PERIOD,
     ROLL,
@@ -153,9 +154,10 @@ def test_review_checks_confirmations_against_the_trade_sheet(tmp_path):
         "differential: confirmation -6.1, trade sheet -6.2"]
     assert status["82999001"].status == NOT_ON_SHEET
     sheet_only = {row.sheet.internal_contract: row.status for row in c.rows if not row.trade}
-    assert sheet_only == {"11005": NO_CONFIRMATION, "11006": NO_CONFIRMATION_DIRECT,
-                          "10950": OUTSIDE_PERIOD}
-    assert (c.standing_rows, c.internal_rows) == (1, 1)
+    # brokered with no confirm; Direct (ICE) and Evergreen come in from the trade sheet
+    assert sheet_only == {"11005": NO_CONFIRMATION, "11006": DIRECT_ICE, "D": DIRECT_ICE,
+                          "": EVERGREEN, "10950": OUTSIDE_PERIOD}
+    assert (c.standing_rows, c.internal_rows) == (0, 0)
     assert c.period == (date(2026, 10, 2), date(2026, 10, 5))
     assert [(f.trade.contract_no, f.kind) for f in r.financial] == [("181000001", FORWARD_HEDGE)]
 
@@ -170,7 +172,8 @@ def test_review_checks_confirmations_against_the_trade_sheet(tmp_path):
     text = format_summary(r)
     assert "physical confirmations matched           4 (2 with differences)" in text
     assert "confirmations not on it                   1" in text
-    assert "1 brokered, 1 direct" in text
+    assert "brokered deals with no broker confirm     1" in text
+    assert "trade sheet only, added to raw-data       1 Evergreen, 2 Direct (ICE)" in text
     assert "SYN" not in text and "-6.2" not in text            # still counts only
 
 
@@ -274,7 +277,8 @@ def test_dashboard_page_holds_the_results(tmp_path):
     assert "https://" not in html and "http://" not in html     # nothing loaded from outside
     src = data["sources"][0]
     assert data["kpi"]["physical"] == 5 and src["kpi"]["matched"] == 4
-    assert src["kpi"]["missing"] == 2 and src["kpi"]["not_on_sheet"] == 1
+    assert src["kpi"]["missing"] == 1 and src["kpi"]["not_on_sheet"] == 1
+    assert (data["kpi"]["sheet_direct"], data["kpi"]["sheet_evergreen"]) == (2, 1)
     assert src["files"] == ["October Trading 2026.xlsx"]
     assert src["named"] == "the monthly trade sheet"
     assert data["logo"].startswith("data:image/png;base64,")
@@ -428,8 +432,8 @@ def test_dashboard_checks_menu_lists_what_failed_and_where(tmp_path):
     assert not not_on["ok"] and not_on["items"][0].startswith("82999001 - ")
     assert not_on["jump"] == {"section": "reconsec", "source": 0,
                               "filter": "NOT ON TRADE SHEET"}
-    missing = by["Monthly trade sheet deals in the period without a confirmation"]
-    assert missing["value"] == 2 and missing["jump"]["filter"] == "MISSING"
+    missing = by["Brokered deals in the period without a broker confirm"]
+    assert missing["value"] == 1 and missing["jump"]["filter"] == "MISSING"
     assert by["Documents no parser recognised"]["items"] == ["random letter.pdf"]
     assert by["Company names not in the counterparty map"]["ok"] in (True, False)
     assert all(c["ok"] == (c["value"] == 0) for c in data["checks"])
@@ -503,3 +507,63 @@ def test_risk_report_without_a_trade_sheet_still_writes(tmp_path):
     from pypdf import PdfReader
     text = "".join(p.extract_text() for p in PdfReader(r.report_pdf).pages)
     assert "No prices" in text
+
+
+# --------------------------------------------------------------------------- source of truth
+
+def test_evergreen_and_direct_rows_come_into_raw_data_with_their_location(tmp_path):
+    from riskparse.rawformat import DEFAULT_HEADERS
+    r = build_review(_zip(tmp_path), tmp_path / "out",
+                     trade_sheet=write_trade_sheet(tmp_path / "ts"))
+    assert len(r.trades) == 6 and len(r.sheet_trades) == 3 and len(r.book) == 9
+    direct = next(t for t in r.sheet_trades if t.contract_no == "11006")
+    assert direct.family == "Trade sheet - Direct (ICE)"
+    assert (direct.side, direct.quantity, direct.grade, direct.location) == (
+        "BUY", Decimal("700"), "SW", "Cromer")
+    assert direct.counterparty == "SYN Direct Co" and direct.seller == "SYN Direct Co"
+    assert (direct.primary_index, direct.fixed_differential, direct.term) == (
+        "WTI CMA", Decimal("1"), "NOV-26")
+    assert direct.evidence["quantity"].startswith("October Trading 2026: Nov CTS!row ")
+    lease = next(t for t in r.sheet_trades if t.family == "Trade sheet - Evergreen")
+    assert lease.trade_date is None and lease.secondary_index == "index"
+
+    # a matched confirmation takes the trade sheet's Location (column N)
+    t90001 = next(t for t in r.trades if t.contract_no == "90001")
+    assert t90001.location == "Cromer" and "trade sheet Location" in t90001.evidence["location"]
+
+    wb = load_workbook(r.raw_data)
+    rows = list(wb["raw-data-format"].iter_rows(values_only=True))
+    assert list(rows[0]) == DEFAULT_HEADERS and DEFAULT_HEADERS[-2:] == ["Location", "Source"]
+    by_no = {row[0]: dict(zip(DEFAULT_HEADERS, row, strict=True)) for row in rows[1:]}
+    assert by_no["11006"]["Source"] == "Trade sheet - Direct (ICE)"
+    assert by_no["11006"]["Location"] == "Cromer" and by_no["11006"]["Quantity"] == 700
+    assert by_no["90001"]["Source"] == "Confirmation - Modern Commodities"
+    checks = {row[0]: row for row in wb["checks"].iter_rows(min_row=2, values_only=True)}
+    assert checks["11006"][10].startswith("TRADE SHEET ONLY - Direct (ICE)")
+    assert "confirm it with the counterparty" in checks["11006"][10]
+    assert not any("not on the monthly" in f for t in r.sheet_trades for f in t.flags)
+
+    html, data = _dashboard_data(r.dashboard)
+    assert {x["type"] for x in data["sheet_only"]} == {"Direct (ICE)", "Evergreen"}
+    assert any(x["location"] == "Cromer" for x in data["locations"])
+    assert 'id="sheetonly"' in html and 'id="loctable"' in html
+
+
+def test_old_format_gets_location_and_source_added(tmp_path):
+    from riskparse.rawformat import DEFAULT_HEADERS
+    wb = Workbook()
+    wb.active.append(DEFAULT_HEADERS[:-4])                # before Fixed Price ... Source
+    wb.save(tmp_path / "old.xlsx")
+    r = build_review(_zip(tmp_path), tmp_path / "out", format_path=tmp_path / "old.xlsx")
+    assert r.format_added == ["Fixed Price", "Currency", "Location", "Source"]
+
+
+def test_unmatched_confirmation_locations_become_place_names():
+    from riskparse.sheetcheck import place_name, tag_locations
+    assert place_name("Cromer, MB (Enbridge)") == "Cromer"
+    assert place_name("Cromer - Enbridge Transfer") == "Cromer"
+    assert place_name("Hardisty - Husky") == "Hardisty" and place_name("Westspur") == "Westspur"
+    t = _trade("1", "SELL", "2500")
+    t.location, t.evidence["location"] = "Cromer, MB (Enbridge)", "p1: Cromer, MB (Enbridge)"
+    tag_locations([t])
+    assert t.location == "Cromer" and "Cromer, MB (Enbridge)" in t.evidence["location"]

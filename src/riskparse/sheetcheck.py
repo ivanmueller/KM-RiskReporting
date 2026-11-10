@@ -19,15 +19,21 @@ How the two sources relate (from the October data and the desk's explanation):
   from a producer and hedged with the bank).
 * A confirmation whose delivery month has no rows at all on a sheet (the monthly workbook
   for that month is not in the folder yet) is **month not on this sheet**, not a break.
-* Trade sheet deals dated inside the confirmations' date range but with no confirmation
-  are **missing confirmations**; standing agreements (Evergreen / Term rows), internal rows
-  (KM, opening inventory) and deals outside that range are counted, not flagged.
+* **Evergreen** rows (``Evergreen`` in the Date column: rolling agreements) and **Direct**
+  rows (``Direct`` in Broker / Direct: trades done on ICE, with no broker confirm) have no
+  contract by nature. They are not breaks: they are brought into the system from the
+  trade sheet (:func:`sheet_only_trades`), taken as correct, and the direct ones wait for
+  a person to confirm them with the counterparty - the only independent check there is.
+* Brokered trade sheet deals dated inside the confirmations' date range but with no
+  confirmation are **missing broker confirms**; Term / Spot rows, internal rows (KM,
+  opening inventory) and deals outside that range are counted, not flagged.
 
 Nothing here changes either source.
 """
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
@@ -42,9 +48,12 @@ DIFFERENCES = "MATCHED - CHECK DIFFERENCES"
 NOT_ON_SHEET = "NOT ON TRADE SHEET"
 MONTH_NOT_COVERED = "MONTH NOT ON THIS SHEET"
 NO_CONFIRMATION = "NO CONFIRMATION"
-NO_CONFIRMATION_DIRECT = "NO CONFIRMATION (direct deal)"
 OUTSIDE_PERIOD = "OUTSIDE CONFIRMATION PERIOD"
-STATUS_ORDER = (DIFFERENCES, NOT_ON_SHEET, NO_CONFIRMATION, NO_CONFIRMATION_DIRECT, MATCHED,
+# trade sheet rows that have no contract by nature: brought into the system from the sheet
+EVERGREEN = "TRADE SHEET ONLY - EVERGREEN"
+DIRECT_ICE = "TRADE SHEET ONLY - DIRECT (ICE)"
+SHEET_ONLY = (EVERGREEN, DIRECT_ICE)
+STATUS_ORDER = (DIFFERENCES, NOT_ON_SHEET, NO_CONFIRMATION, MATCHED, DIRECT_ICE, EVERGREEN,
                 MONTH_NOT_COVERED, OUTSIDE_PERIOD)
 
 ROLL = "ROLL"
@@ -55,7 +64,7 @@ FORWARD_MONTHS = 3          # a swap this many months ahead of its trade date is
 GRADES = {"MID": "MIDALE", "MIDALE": "MIDALE", "LSB": "LSB", "SW": "SW", "WCS": "WCS"}
 BROKERS = {"modern": {"MODERN"}, "one exchange": {"OX", "ONE EXCHANGE"},
            "marex": {"MAREX"}, "calrock": {"CR", "CALROCK", "CAL ROCK"}}
-DIRECT = {"", "DIRECT"}
+DIRECT = {"DIRECT"}
 MIN_SCORE = 4               # the differential alone, or the trade date and the broker
 APPORTION_TOLERANCE = Decimal("0.005")
 
@@ -83,7 +92,7 @@ class SheetCheck:
     rows: list[CheckRow] = field(default_factory=list)
     financial: list[FinancialRow] = field(default_factory=list)
     period: tuple[date, date] | None = None
-    standing_rows: int = 0          # Evergreen / Term rows (not dated deals)
+    standing_rows: int = 0          # Term / Spot rows (not dated deals, not Evergreen)
     internal_rows: int = 0
 
     def count(self, status: str) -> int:
@@ -115,6 +124,14 @@ def broker_key(family: str) -> set[str]:
 
 def is_financial(t: Trade) -> bool:
     return t.family.upper().startswith("ISDA")
+
+
+def is_evergreen(s: SheetTrade) -> bool:
+    return s.trade_date is None and s.date_text.strip().lower().startswith("evergreen")
+
+
+def is_direct(s: SheetTrade) -> bool:
+    return s.broker.strip().upper() in DIRECT
 
 
 def is_internal(s: SheetTrade) -> bool:
@@ -329,6 +346,16 @@ def check_against_sheet(trades: list[Trade], sheet: TradeSheet,
     for s in sheet.trades:
         if id(s) in taken_s:
             continue
+        if is_evergreen(s):
+            result.rows.append(CheckRow(EVERGREEN, None, s, notes=[
+                "rolling Evergreen agreement: no contract in the contracts folder; taken "
+                "from the trade sheet"]))
+            continue
+        if is_direct(s):
+            result.rows.append(CheckRow(DIRECT_ICE, None, s, notes=[
+                "direct trade on ICE: no broker confirm; taken from the trade sheet as "
+                "correct - confirm it with the counterparty"]))
+            continue
         if is_internal(s):
             result.internal_rows += 1
             continue
@@ -336,13 +363,15 @@ def check_against_sheet(trades: list[Trade], sheet: TradeSheet,
             result.standing_rows += 1
             continue
         inside = result.period and result.period[0] <= s.trade_date <= result.period[1]
-        if not inside:
-            status = OUTSIDE_PERIOD
-        elif s.broker.upper() in DIRECT:
-            status = NO_CONFIRMATION_DIRECT
-        else:
-            status = NO_CONFIRMATION
-        result.rows.append(CheckRow(status, None, s))
+        result.rows.append(CheckRow(NO_CONFIRMATION if inside else OUTSIDE_PERIOD, None, s))
+
+    # a matched confirmation takes the trade sheet's Location (column N)
+    for r in matched:
+        if r.sheet.location:
+            r.trade.evidence["location"] = (f"{r.sheet.where}: '{r.sheet.location}' (trade "
+                                            f"sheet Location; confirmation said "
+                                            f"'{r.trade.location or 'nothing'}')")
+            r.trade.location = r.sheet.location
 
     for r in result.rows:
         if r.trade is None:
@@ -355,3 +384,85 @@ def check_against_sheet(trades: list[Trade], sheet: TradeSheet,
                                     (r.trade.trade_date if r.trade else r.sheet.trade_date)
                                     or date.max))
     return result
+
+
+def place_name(location: str) -> str:
+    """'Cromer, MB (Enbridge)' / 'Cromer - Enbridge Transfer' -> 'Cromer': the place, as the
+    trade sheet's Location column writes it."""
+    return re.split(r",|\(| - ", location or "", maxsplit=1)[0].strip()
+
+
+def tag_locations(trades: list[Trade]) -> None:
+    """Confirmed physical trades not matched to the trade sheet: the confirmation's location
+    shortened to the place name (the full text stays in the evidence)."""
+    for t in trades:
+        if is_financial(t) or not t.location or "trade sheet Location" in t.evidence.get(
+                "location", ""):
+            continue
+        short = place_name(t.location)
+        if short and short != t.location:
+            t.evidence["location"] = (t.evidence.get("location", t.location)
+                                      + f"  -> '{short}' (the place, as on the trade sheet)")
+            t.location = short
+
+
+def sheet_only_trades(check: SheetCheck, nmap: NameMap | None,
+                      us: str = "Kingston Marketing Limited") -> list[Trade]:
+    """The Evergreen and Direct (ICE) rows of the trade sheet as trades: no contract, the
+    trade sheet is the record. Every value's evidence is its trade sheet row."""
+    from riskparse.confirms import month_term
+    out = []
+    for r in check.rows:
+        if r.status not in SHEET_ONLY:
+            continue
+        s = r.sheet
+        family = ("Trade sheet - Evergreen" if r.status == EVERGREEN
+                  else "Trade sheet - Direct (ICE)")
+        t = Trade(family=family, source_doc="trade sheet", source_file=s.book or "trade sheet",
+                  contract_no=s.internal_contract)
+        name = s.counterparty
+        if nmap is not None and name:
+            name = nmap.lookup(name)[0] or name
+        start = s.delivery_month
+        end = None
+        if start:
+            nxt = date(start.year + start.month // 12, start.month % 12 + 1, 1)
+            end = date.fromordinal(nxt.toordinal() - 1)
+        values = {
+            "trade_date": s.trade_date, "start_date": start, "end_date": end,
+            "term": month_term(start, end) if start else "", "trader": s.trader,
+            "counterparty": name, "side": s.side, "quantity": s.volume,
+            "unit": "m3/month" if s.volume is not None else "", "grade": s.grade,
+            "currency": s.currency, "location": s.location, "broker": s.broker or "",
+        }
+        if name:
+            values["seller"] = name if s.side == "BUY" else us
+            values["buyer"] = us if s.side == "BUY" else name
+        basis = s.price_basis.strip().upper()
+        if basis.startswith("FIXED"):
+            values["primary_index"] = "WTI CMA"
+            values["fixed_differential"] = s.differential
+            if s.differential is not None:
+                t.price_unit = "USD/bbl"
+        elif basis.startswith("INDEX"):
+            values["primary_index"] = "WTI CMA"
+            values["secondary_index"] = f"{s.index_type} index".strip() if s.index_type \
+                else "index"
+            values["fixed_differential"] = s.differential
+            if s.differential is not None:
+                t.price_unit = "USD/bbl"
+        for attr, v in values.items():
+            if v in (None, ""):
+                continue
+            setattr(t, attr, v)
+            t.evidence[attr] = f"{s.where}: {v}"
+        if s.differential_text:
+            t.flags.append(f"price on the trade sheet: '{s.differential_text}' (as entered)")
+        if t.price_unit:
+            t.evidence["price_currency"] = (f"{s.where}: a differential to WTI CMA, quoted in "
+                                            "USD/bbl by market convention")
+        if s.stream:
+            t.evidence["stream"] = f"{s.where}: {s.stream}"
+        t.documents.append(f"{s.where}")
+        out.append(t)
+    return out

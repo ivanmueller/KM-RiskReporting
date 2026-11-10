@@ -83,6 +83,14 @@ class Trade:
     names_as_written: dict[str, str] = field(default_factory=dict)  # before the name map
 
     @property
+    def source_label(self) -> str:
+        """Where the trade comes from: "Confirmation - Modern Commodities", or the trade
+        sheet for rows with no contract ("Trade sheet - Evergreen", "... - Direct (ICE)")."""
+        if self.family.startswith("Trade sheet"):
+            return self.family
+        return f"Confirmation - {self.family.split(' (')[0]}"
+
+    @property
     def price_currency(self) -> str:
         """The currency the price (differential or fixed price) is quoted in: "USD/bbl" -> USD."""
         return self.price_unit.split("/")[0].strip().upper() if self.price_unit else ""
